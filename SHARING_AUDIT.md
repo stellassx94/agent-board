@@ -11,3 +11,7 @@
 | Distribution limits | This is an Apple Silicon build for macOS 13 or later. It is locally signed and not notarized. Intel and a second Mac have not been tested. |
 
 The public GitHub and private GitLab release pages provide the same reviewed source tag and package bytes. Agent Board does not install updates automatically.
+
+## v0.4.7 Continue later release check
+
+The release delta adds explicit chat parking to the existing v0.4.6 closeout flow. Personal board state stays in each user's data directory; the release source and app contain no session logs, private notes, or credentials. All 16 regression tests, Python and inline JavaScript syntax, bundled-source equality, clean-profile status (zero sessions and workstreams), ZIP extraction, and app signature passed. Local Apple Silicon ZIP SHA-256: `dc96e482ac6e2b2576341ba5506de454a798998b71ac26abdee9cb9c271f381b`. Dual-remote and independent download checks must pass before calling this release complete.

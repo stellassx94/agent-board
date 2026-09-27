@@ -8,7 +8,7 @@ Both options need macOS 13 or later. The [Agent Board GitHub project](https://gi
 
 ### Option A — download the ready-built app
 
-1. Open the [v0.4.6 release](https://github.com/stellassx94/agent-board/releases/tag/v0.4.6) and download **Agent Board v0.4.6 for Apple Silicon (.zip)**.
+1. Open the [v0.4.7 release](https://github.com/stellassx94/agent-board/releases/tag/v0.4.7) and download **Agent Board v0.4.7 for Apple Silicon (.zip)**.
 2. Unzip it and put `Agent Board.app` in the location where you plan to keep it. It needs neither Xcode Command Line Tools nor `uvx`.
 3. Open **System Settings → Privacy & Security → Accessibility**. Add `Agent Board.app` with the **+** button if it is not listed and switch it on. This permission is required. Then open Agent Board; if it is already running, quit and reopen it. If you move or replace the app later, macOS may ask you to grant access again.
 4. Accessibility access and Gatekeeper approval are separate. If macOS blocks this locally signed, non-notarized app, verify that it came from the official GitHub release, then use **System Settings → Privacy & Security → Open Anyway** if your Mac permits it. Do not change either setting if your company policy blocks it.

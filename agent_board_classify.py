@@ -17,12 +17,14 @@ from pathlib import Path
 DATA_DIR = Path(os.environ.get("AGENT_BOARD_DATA_DIR", "~/.agent-board")).expanduser()
 OUT = Path(os.environ.get("AGENT_BOARD_SUGGESTIONS_FILE", str(DATA_DIR / "agent_board_suggestions.json"))).expanduser()
 COMPLETED_OUT = Path(os.environ.get("AGENT_BOARD_COMPLETED_FILE", str(DATA_DIR / "agent_board_completed.json"))).expanduser()
+FLAGS_OUT = Path(os.environ.get("AGENT_BOARD_FLAGS_FILE", str(DATA_DIR / "agent_board_flags.json"))).expanduser()
 MAX_TAIL = 1_000_000
 CONTINUE = re.compile(r"\b(next steps?|remaining|still need|pending|blocked by|waiting for|follow[ -]?up|to continue|not yet|needs your|need you to|once (?:you|we) (?:have|confirm|provide)|after (?:you|we) (?:have|confirm|provide))\b", re.I)
 DONE = re.compile(r"\b(completed|implemented|fixed|updated|created|saved|verified|delivered|finished|resolved|published|ready)\b", re.I)
 QUESTION = re.compile(r"\b(?:please|could you|would you|can you|do you|which|what|when|where|how)\b[^?\n]{0,180}\?\s*$", re.I)
 ONE_OFF = re.compile(r"^(?:what|who|when|where|why|how|is|are|can|does|do|translate|rewrite|summarize)\b", re.I)
 SYSTEM_MARKERS = ("<recommended_plugins>", "<environment_context>", "<skills_instructions>", "The following is the Codex agent history")
+PARK = re.compile(r"(?:continue later|(?:let's|we can|please|i will|i'll) continue later|pause (?:this|the session) and continue later)", re.I)
 CLOSEOUT = re.compile(
     r"(?:"
     r"done|all done|"
@@ -86,6 +88,14 @@ def is_explicit_closeout(value):
     return bool(CLOSEOUT.fullmatch(normalized))
 
 
+def is_explicit_park(value):
+    """Only short user closeouts can park a session automatically."""
+    if not isinstance(value, str) or "?" in value:
+        return False
+    normalized = re.sub(r"\s+", " ", value.replace("’", "'")).strip().rstrip(".! ")
+    return bool(normalized and len(normalized) <= 80 and PARK.fullmatch(normalized))
+
+
 def classify(hook):
     answer = re.sub(r"\s+", " ", hook.get("last_assistant_message") or "").strip()
     user = latest_user(hook.get("transcript_path"))
@@ -93,6 +103,8 @@ def classify(hook):
         return "continue", "Background or scheduled work is still in progress."
     if not answer:
         return "uncertain", "No final reply was available to assess."
+    if is_explicit_park(user):
+        return "chat_parked", "You explicitly saved this session for later in chat."
     if is_explicit_closeout(user):
         return "chat_done", "You explicitly marked this session done in chat."
     # A question at the end is a request for the user's next move.
@@ -147,6 +159,30 @@ def save_completion(sid, source="chat-closeout", at=None):
         fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def save_parked(sid, at=None):
+    """Mark this session finished and keep its workstream starred for resumption."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+        raise ValueError("invalid session id")
+    stamp = time.time() if at is None else at
+    save_completion(sid, source="chat-parked", at=stamp)
+    FLAGS_OUT.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = FLAGS_OUT.with_suffix(".lock")
+    with open(lock_path, "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            flags = json.loads(FLAGS_OUT.read_text())
+            if not isinstance(flags, dict):
+                flags = {}
+        except (OSError, ValueError):
+            flags = {}
+        # Preserve a note or earlier star rather than resetting it on a repeat hook.
+        flags.setdefault(sid, {"note": "", "at": stamp})
+        tmp = FLAGS_OUT.with_suffix(".tmp")
+        tmp.write_text(json.dumps(flags, indent=1, ensure_ascii=False))
+        tmp.replace(FLAGS_OUT)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def clear_suggestion(sid):
     """Remove a fallback suggestion after promoting it to completion."""
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +213,9 @@ def main():
             print(json.dumps({"id": sid, "state": state, "reason": reason}))
         elif state == "chat_done":
             save_completion(sid)
+        elif state == "chat_parked":
+            save_parked(sid)
+            clear_suggestion(sid)
         else:
             save(sid, state, reason)
     except Exception:

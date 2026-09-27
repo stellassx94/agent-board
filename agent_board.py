@@ -764,6 +764,10 @@ def visible_suggestion(suggestion, now, activity):
 def board_bucket(row):
     """One display bucket shared by the web page and menu bar plugin."""
     if row["completed"]:
+        # A chat "continue later" closes this session but keeps its starred
+        # workstream in the saved follow-up list.
+        if row.get("completion_source") == "chat-parked" and row.get("flag"):
+            return "pending"
         return "completed"
     if row["choice"] == "temporary":
         return "temporary"
@@ -803,10 +807,14 @@ def recover_suggestion(session, path, now, completed):
             "last_assistant_message": session["last_reply"],
             "transcript_path": str(path),
         })
-        if state == "chat_done":
-            turn_classifier.save_completion(session["id"], at=now)
+        if state in ("chat_done", "chat_parked"):
+            if state == "chat_parked":
+                turn_classifier.save_parked(session["id"], at=now)
+                completed[session["id"]] = {"at": now, "source": "chat-parked"}
+            else:
+                turn_classifier.save_completion(session["id"], at=now)
+                completed[session["id"]] = {"at": now, "source": "chat-closeout"}
             turn_classifier.clear_suggestion(session["id"])
-            completed[session["id"]] = {"at": now, "source": "chat-closeout"}
             _fallback_cache[key] = None
         else:
             turn_classifier.save(session["id"], state, reason, source="board-fallback-rules")
@@ -827,17 +835,23 @@ def status(hours):
     # Promote those records once, preserving their original timestamp so a
     # later substantive user message still reopens the session.
     for sid, suggestion in list(suggestions.items()):
-        if not isinstance(suggestion, dict) or suggestion.get("state") != "chat_done":
+        if not isinstance(suggestion, dict) or suggestion.get("state") not in ("chat_done", "chat_parked"):
             continue
         at = suggestion.get("at")
         if not isinstance(at, (int, float)):
             at = now
         marker = completed.get(sid) or {}
         if marker.get("at", 0) < at:
-            turn_classifier.save_completion(sid, at=at)
-            completed[sid] = {"at": at, "source": "chat-closeout"}
+            if suggestion["state"] == "chat_parked":
+                turn_classifier.save_parked(sid, at=at)
+                completed[sid] = {"at": at, "source": "chat-parked"}
+                flags = load_flags()
+            else:
+                turn_classifier.save_completion(sid, at=at)
+                completed[sid] = {"at": at, "source": "chat-closeout"}
         turn_classifier.clear_suggestion(sid)
         suggestions.pop(sid, None)
+    flags = load_flags()  # fallback recovery may have added a parked star
     lineage = ws.load()
     app_titles = claude_app_titles()
     linked_ids = set(lineage["links"]) | {v["parent"] for v in lineage["links"].values()}
@@ -861,6 +875,8 @@ def status(hours):
                     suggestions[s["id"]] = recovered
                 else:
                     suggestions.pop(s["id"], None)
+            if completed.get(s["id"], {}).get("source") == "chat-parked":
+                flags = load_flags()  # a missed hook may have parked it during fallback
             rows.append({**{k: v for k, v in s.items() if k not in ("pending", "last_reply")}, "pending_list": s["pending"], "state": state, "detail": detail,
                          "quiet_min": round((now - s["activity"]) / 60, 1), "flag": flags.get(p.stem)})
     for p in (CODEX_DIR / "sessions").glob("*/*/*/*.jsonl"):
@@ -878,6 +894,8 @@ def status(hours):
                 suggestions[s["id"]] = recovered
             else:
                 suggestions.pop(s["id"], None)
+        if completed.get(s["id"], {}).get("source") == "chat-parked":
+            flags = load_flags()  # a missed hook may have parked it during fallback
         rows.append({**{k: v for k, v in s.items() if k not in ("pending", "last_reply")}, "pending_list": s["pending"], "state": state, "detail": detail,
                      "quiet_min": round((now - s["activity"]) / 60, 1), "flag": flags.get(s["id"])})
     tree = None
@@ -1041,7 +1059,8 @@ function foldSection(id,n){const section=$('#'+id);if(section.dataset.count!==St
 function detail(x){if(!x)return '<div class="empty">Select a workstream to see its details.</div>';const b=bucketOf(x),isGroup=view==='workstreams',l=isGroup?lead(x):x,last=isGroup?latest(x):x,n=isGroup?x.session_count:1;
  const status=b==='yourturn'&&x.needs_completion?'Your turn':LABEL[b]||'Idle';
  const context=b==='asking'?'The agent is asking a question or permission. Open the latest session to respond.':b==='check'?'The session may need intervention. Open it to verify what is happening.':b==='yourturn'?'The agent replied. Review the result and decide the next step.':b==='idle'?'There is no recent activity. Idle does not mean complete.':detailOf(x);
- return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'blue',active:'green',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${x.completed?(x.completion_source==='chat-closeout'?'Confirmed from chat':'Confirmed by you'):'Not confirmed'}</span></div>`}
+ const completionConfirmed=x.completed||(isGroup&&l?.completed),completionSource=x.completed?x.completion_source:l?.completion_source,completionText=!completionConfirmed?'Not confirmed':completionSource==='chat-parked'?'Session done · starred for later':completionSource==='chat-closeout'?'Confirmed from chat':'Confirmed by you';
+ return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'blue',active:'green',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
 function render(){if(!data)return;hideActionTooltip();const items=(view==='workstreams'?data.workstreams:data.sessions).filter(visible),groups=Object.fromEntries(Object.keys(LABEL).map(k=>[k,items.filter(x=>x.bucket===k)]));
  if(!items.some(x=>x.id===selected))selected=items.find(x=>['asking','check','yourturn'].includes(x.bucket))?.id||items[0]?.id||null;
  for(const [bucket,id] of Object.entries({asking:'ask',check:'check',yourturn:'review',active:'work',pending:'later',idle:'idle',completed:'done',temporary:'temporary',suggested:'suggested'})){const xs=groups[bucket],list=$('#list-'+id),head=document.querySelector(`[data-group="${bucket}"]`);list.innerHTML=xs.map(row).join('');list.hidden=xs.length===0;if(head)head.hidden=xs.length===0;count('count-'+id,xs.length);count('metric-'+id,xs.length)}
