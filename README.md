@@ -45,7 +45,7 @@ This repository contains source and examples only. Do not commit local session l
 
 ## Mac app
 
-For an Apple Silicon Mac running macOS 13 or later, choose either the [ready-built v0.4.7 app](https://github.com/stellassx94/agent-board/releases/tag/v0.4.7) or a local source build. The ready-built ZIP is attached to the public GitHub release and does not require VPN, Xcode Command Line Tools, `uvx`, Python, or SwiftBar. Its SHA-256 is `dc96e482ac6e2b2576341ba5506de454a798998b71ac26abdee9cb9c271f381b`. Unzip it and put `Agent Board.app` in the location where you plan to keep it. Then grant it the required **Accessibility** access using the steps at the top of this README and reopen the app.
+For an Apple Silicon Mac running macOS 13 or later, choose either the [ready-built v0.4.8 app](https://github.com/stellassx94/agent-board/releases/tag/v0.4.8) or a local source build. The ready-built ZIP is attached to the public GitHub release and does not require VPN, Xcode Command Line Tools, `uvx`, Python, or SwiftBar. Its SHA-256 is `419f0bdb4415c2c82e1a0bf2dd14aa71512c647532834cf7db5ed3d27277804b`. Unzip it and put `Agent Board.app` in the location where you plan to keep it. Then grant it the required **Accessibility** access using the steps at the top of this README and reopen the app.
 
 Accessibility access and Gatekeeper approval are separate. Because the app is locally signed but not Apple-notarized, macOS may also block the first launch. If that happens, verify that you downloaded it from the official release, then use **System Settings → Privacy & Security → Open Anyway**. Do not change either setting if your company policy blocks it.
 

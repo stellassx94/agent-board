@@ -3,6 +3,8 @@ import io
 import json
 import sys
 import tempfile
+import time
+from datetime import datetime, timezone
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,6 +16,41 @@ SID = "01a0e10d-32d8-7fe2-af33-d8420e1ed107"
 
 
 class ContinueLaterCloseoutTests(unittest.TestCase):
+    def test_in_flight_codex_closeout_parks_before_stop_and_stays_put(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transcript = root / (SID + ".jsonl")
+            now = time.time()
+            user_stamp = datetime.fromtimestamp(now - 2, timezone.utc).isoformat()
+            reply_stamp = datetime.fromtimestamp(now - 1, timezone.utc).isoformat()
+            transcript.write_text("\n".join(json.dumps(row) for row in (
+                {"type": "session_meta", "payload": {"id": SID, "cwd": directory}},
+                {"timestamp": user_stamp, "type": "event_msg", "payload": {"type": "user_message", "message": "continue later"}},
+                {"timestamp": reply_stamp, "type": "event_msg", "payload": {"type": "agent_message", "message": "Parking this now."}},
+            )) + "\n")
+            completed_file, flags_file, suggestions_file = (root / name for name in ("completed.json", "flags.json", "suggestions.json"))
+            with mock.patch.object(board, "codex_titles", return_value={}), mock.patch.object(classifier, "COMPLETED_OUT", completed_file), mock.patch.object(classifier, "FLAGS_OUT", flags_file), mock.patch.object(classifier, "OUT", suggestions_file), mock.patch.object(board, "COMPLETED_FILE", completed_file), mock.patch.object(board, "DATA_DIR", root):
+                session = board.parse_codex(transcript)
+                self.assertNotEqual("done", session["last_kind"])
+                self.assertEqual("continue later", session["last_user"])
+                completed = {}
+                self.assertTrue(board.park_requested(session, completed, now))
+                self.assertTrue(board.completion_active(session, completed[SID]))
+                self.assertEqual("chat-parked", json.loads(completed_file.read_text())[SID]["source"])
+                self.assertIn(SID, json.loads(flags_file.read_text()))
+                in_flight = {"completed": True, "completion_source": "chat-parked", "flag": {"at": now}, "choice": None, "state": "running"}
+                self.assertEqual("pending", board.board_bucket(in_flight))
+                self.assertFalse(board.park_requested(session, completed, now + 2))
+                flags_file.write_text("{}")  # a manual unstar must survive the late Stop hook
+                self.assertFalse(classifier.save_parked(SID, at=now + 2, user_at=session["last_user_ts"]))
+                self.assertEqual({}, json.loads(flags_file.read_text()))
+                board.save_completed(SID, False)
+                completed = board.load_completed()
+                self.assertFalse(board.park_requested(session, completed, now + 3))
+                self.assertFalse(classifier.save_parked(SID, at=now + 4, user_at=session["last_user_ts"]))
+                later = dict(session, last_user="new task", last_user_ts=now + 5)
+                self.assertFalse(board.completion_active(later, completed[SID]))
+
     def test_only_explicit_short_phrases_park(self):
         for value in ("continue later", "Continue later.", "let's continue later", "pause this and continue later"):
             with self.subTest(value=value):

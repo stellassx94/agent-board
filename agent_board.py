@@ -202,6 +202,7 @@ def parse_session(path):
     pending = {}
     bg = {}  # background jobs started by this session, keyed by tool_use id
     last_kind, last_ts, last_text, last_prompt, cwd = None, None, "", None, None
+    last_user, last_user_ts = "", None
     for raw in lines:
         if not raw.strip():
             continue
@@ -234,6 +235,9 @@ def parse_session(path):
             if synthetic_user_event(d, content):
                 continue
             if isinstance(content, list):
+                user_text = turn_classifier.text_content(content).strip()
+                if user_text and not any(marker in user_text for marker in turn_classifier.SYSTEM_MARKERS):
+                    last_user, last_user_ts = user_text, when
                 for b in content:
                     if b.get("type") == "tool_result":
                         tid = b.get("tool_use_id")
@@ -248,6 +252,8 @@ def parse_session(path):
                 else:
                     last_kind = "thinking"
                 last_ts = when
+                if not any(marker in content for marker in turn_classifier.SYSTEM_MARKERS):
+                    last_user, last_user_ts = content, when
         else:
             msg = d.get("message") or {}
             for b in content or []:
@@ -268,6 +274,8 @@ def parse_session(path):
         "cwd": start_cwd or cwd,
         "last_kind": last_kind,
         "last_ts": last_ts,
+        "last_user": last_user,
+        "last_user_ts": last_user_ts,
         "last_text": short(last_text, 220),
         "last_reply": last_text,
         "pending": [{"name": n, "label": tool_label(n, i), "cmd": (i or {}).get("command", ""), "ts": w}
@@ -492,6 +500,7 @@ def parse_codex(path):
     pending = {}
     awaiting_question = None
     last_kind, last_ts, last_text = None, None, ""
+    last_user, last_user_ts = "", None
     for raw in lines:
         try:
             d = json.loads(raw)
@@ -505,6 +514,7 @@ def parse_codex(path):
                 last_kind, last_ts = "thinking", when
                 if pt == "user_message":
                     awaiting_question = None
+                    last_user, last_user_ts = p.get("message") or "", when
                 if pt == "user_message" and not first_msg:
                     first_msg = p.get("message")
             elif pt in ("task_complete", "turn_aborted"):
@@ -514,6 +524,10 @@ def parse_codex(path):
                 last_text = p.get("last_agent_message") or last_text
             elif pt == "agent_message":
                 last_text, last_ts = p.get("message") or last_text, when
+        elif d.get("type") == "response_item" and pt == "message" and p.get("role") == "user":
+            user_text = turn_classifier.text_content(p.get("content")).strip()
+            if user_text and not any(marker in user_text for marker in turn_classifier.SYSTEM_MARKERS):
+                last_user, last_user_ts = user_text, when
         elif d.get("type") == "response_item" and p.get("call_id"):
             if pt.endswith("_call_output"):
                 pending.pop(p["call_id"], None)
@@ -537,6 +551,8 @@ def parse_codex(path):
         "cwd": cwd,
         "last_kind": last_kind,
         "last_ts": last_ts,
+        "last_user": last_user,
+        "last_user_ts": last_user_ts,
         "last_text": short(last_text, 220),
         "last_reply": last_text,
         "pending": [{"name": n, "label": lbl, "cmd": "", "ts": w} for n, lbl, w in pending_items],
@@ -742,7 +758,9 @@ def save_completed(sid, on):
         if on:
             completed[sid] = {"at": time.time(), "source": "board"}
         else:
-            completed.pop(sid, None)
+            # Remember an Undo until a new user instruction, so the board and
+            # a late Stop hook cannot immediately re-apply the old closeout.
+            completed[sid] = {"at": time.time(), "source": "board-undone"}
         tmp = COMPLETED_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(completed, indent=1))
         tmp.replace(COMPLETED_FILE)
@@ -792,6 +810,33 @@ def board_bucket(row):
     return state if state in ("yourturn", "idle") else "idle"
 
 
+def park_requested(session, completed, now):
+    """Apply an explicit chat closeout on the first status poll, before Stop."""
+    user_at = session.get("last_user_ts")
+    if (not user_at or not 0 <= now - user_at <= 120 or
+            not turn_classifier.is_explicit_park(session.get("last_user"))):
+        return False
+    marker = completed.get(session["id"]) or {}
+    if marker.get("source") == "chat-parked" and marker.get("at", 0) >= user_at:
+        return False
+    if marker.get("source") == "board-undone" and marker.get("at", 0) >= user_at:
+        return False
+    if not turn_classifier.save_parked(session["id"], at=now, user_at=user_at):
+        return False
+    completed[session["id"]] = {"at": now, "source": "chat-parked"}
+    turn_classifier.clear_suggestion(session["id"])
+    return True
+
+
+def completion_active(row, marker):
+    if not marker or marker.get("source") == "board-undone":
+        return False
+    if marker.get("source") == "chat-parked":
+        # Assistant activity after the user's closeout should not reopen it.
+        return bool(row.get("last_user_ts") and row["last_user_ts"] <= marker.get("at", 0))
+    return row["activity"] <= marker.get("at", 0)
+
+
 def recover_suggestion(session, path, now, completed):
     """Cover a missed Stop hook for a recently finished turn."""
     finished_at = session.get("last_ts")
@@ -809,8 +854,8 @@ def recover_suggestion(session, path, now, completed):
         })
         if state in ("chat_done", "chat_parked"):
             if state == "chat_parked":
-                turn_classifier.save_parked(session["id"], at=now)
-                completed[session["id"]] = {"at": now, "source": "chat-parked"}
+                if turn_classifier.save_parked(session["id"], at=now, user_at=session.get("last_user_ts")):
+                    completed[session["id"]] = {"at": now, "source": "chat-parked"}
             else:
                 turn_classifier.save_completion(session["id"], at=now)
                 completed[session["id"]] = {"at": now, "source": "chat-closeout"}
@@ -843,9 +888,9 @@ def status(hours):
         marker = completed.get(sid) or {}
         if marker.get("at", 0) < at:
             if suggestion["state"] == "chat_parked":
-                turn_classifier.save_parked(sid, at=at)
-                completed[sid] = {"at": at, "source": "chat-parked"}
-                flags = load_flags()
+                if turn_classifier.save_parked(sid, at=at):
+                    completed[sid] = {"at": at, "source": "chat-parked"}
+                    flags = load_flags()
             else:
                 turn_classifier.save_completion(sid, at=at)
                 completed[sid] = {"at": at, "source": "chat-closeout"}
@@ -868,6 +913,9 @@ def status(hours):
             except Exception:
                 continue
             state, detail = classify(s, now, ps_lines)
+            if park_requested(s, completed, now):
+                flags = load_flags()
+                suggestions.pop(s["id"], None)
             previous = suggestions.get(s["id"]) or {}
             if previous.get("at", 0) < (s.get("last_ts") or 0) - 5:
                 recovered = recover_suggestion(s, p, now, completed)
@@ -887,6 +935,9 @@ def status(hours):
         if not s:
             continue
         state, detail = classify(s, now, ps_lines)
+        if park_requested(s, completed, now):
+            flags = load_flags()
+            suggestions.pop(s["id"], None)
         previous = suggestions.get(s["id"]) or {}
         if previous.get("at", 0) < (s.get("last_ts") or 0) - 5:
             recovered = recover_suggestion(s, p, now, completed)
@@ -901,7 +952,7 @@ def status(hours):
     tree = None
     for r in rows:
         marker = completed.get(r["id"])
-        r["completed"] = bool(marker and r["activity"] <= marker.get("at", 0))
+        r["completed"] = completion_active(r, marker)
         r["completion_source"] = marker.get("source") if r["completed"] else None
         choice = choices.get(r["id"])
         r["choice"] = (choice.get("state") if choice and
@@ -1075,7 +1126,8 @@ function render(){if(!data)return;hideActionTooltip();const items=(view==='works
  $('#updated').textContent=`Live · updated ${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · ${data.version||'local copy'}`;$('#updated').classList.remove('offline');document.title=`Agent Board · ${attention} need attention`;
  $('#release-service-version').textContent=data.version||'local copy';
 }
-async function tick(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('Offline');data=await r.json();render()}catch(e){$('#updated').textContent='Board service offline';$('#updated').classList.add('offline');document.title='Agent Board offline'}}
+let tickBusy=false;
+async function tick(){if(tickBusy)return;tickBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('Offline');data=await r.json();render()}catch(e){$('#updated').textContent='Board service offline';$('#updated').classList.add('offline');document.title='Agent Board offline'}finally{tickBusy=false}}
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error('Could not save change');await tick()}
 let linkChild=null;
 function linkResults(){const q=$('#link-search').value.toLowerCase().trim(),current=data.sessions.find(s=>s.id===linkChild)?.workstream_id;$('#link-results').innerHTML=data.workstreams.filter(w=>w.id!==linkChild&&w.id!==current&&(!q||w.title.toLowerCase().includes(q))).slice(0,30).map(w=>`<button type="button" class="action" data-action="linktarget" data-id="${escapeHTML(w.id)}">${escapeHTML(w.title)} · ${w.session_count} sessions</button>`).join('')||'<div class="empty">No matching workstreams</div>'}
@@ -1097,7 +1149,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  else if(a==='link'){const s=data.sessions.find(x=>x.id===id);if(s.linked_from)await post('/api/unlink',{child:id});else{linkChild=id;$('#link-search').value='';linkResults();$('#link-dialog').showModal()}}
  }catch(err){alert(err.message)}});
 $('#search').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render()});$('#link-search').addEventListener('input',linkResults);$('#link-cancel').addEventListener('click',()=>$('#link-dialog').close());
-updateNav();tick();setInterval(tick,5000);
+updateNav();tick();setInterval(tick,2000);
 </script></body></html>"""
 
 class Handler(BaseHTTPRequestHandler):

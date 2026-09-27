@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("AGENT_BOARD_DATA_DIR", "~/.agent-board")).expanduser()
@@ -45,9 +46,9 @@ def text_content(value):
     return ""
 
 
-def latest_user(path):
+def latest_user_event(path):
     if not path or not Path(path).is_file():
-        return ""
+        return "", None
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
         size = f.tell()
@@ -72,8 +73,16 @@ def latest_user(path):
             value = text_content(payload.get("content"))
         value = re.sub(r"\s+", " ", value).strip()
         if value and not any(marker in value for marker in SYSTEM_MARKERS):
-            return value[:1000]
-    return ""
+            try:
+                when = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp()
+            except (KeyError, TypeError, ValueError):
+                when = None
+            return value[:1000], when
+    return "", None
+
+
+def latest_user(path):
+    return latest_user_event(path)[0]
 
 
 def is_explicit_closeout(value):
@@ -140,7 +149,7 @@ def save(sid, state, reason, source="stop-hook-rules"):
         fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def save_completion(sid, source="chat-closeout", at=None):
+def save_completion(sid, source="chat-closeout", at=None, user_at=None):
     """Persist a reversible, timestamp-bound completion marker."""
     COMPLETED_OUT.parent.mkdir(parents=True, exist_ok=True)
     lock_path = COMPLETED_OUT.with_suffix(".lock")
@@ -152,19 +161,26 @@ def save_completion(sid, source="chat-closeout", at=None):
                 data = {}
         except (OSError, ValueError):
             data = {}
+        if source == "chat-parked" and user_at is not None:
+            previous = data.get(sid) or {}
+            if (previous.get("source") in ("board-undone", "chat-parked") and
+                    previous.get("at", 0) >= user_at):
+                return False
         data[sid] = {"at": time.time() if at is None else at, "source": source}
         tmp = COMPLETED_OUT.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False))
         tmp.replace(COMPLETED_OUT)
         fcntl.flock(lock, fcntl.LOCK_UN)
+    return True
 
 
-def save_parked(sid, at=None):
+def save_parked(sid, at=None, user_at=None):
     """Mark this session finished and keep its workstream starred for resumption."""
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
         raise ValueError("invalid session id")
     stamp = time.time() if at is None else at
-    save_completion(sid, source="chat-parked", at=stamp)
+    if not save_completion(sid, source="chat-parked", at=stamp, user_at=user_at):
+        return False
     FLAGS_OUT.parent.mkdir(parents=True, exist_ok=True)
     lock_path = FLAGS_OUT.with_suffix(".lock")
     with open(lock_path, "a+") as lock:
@@ -181,6 +197,7 @@ def save_parked(sid, at=None):
         tmp.write_text(json.dumps(flags, indent=1, ensure_ascii=False))
         tmp.replace(FLAGS_OUT)
         fcntl.flock(lock, fcntl.LOCK_UN)
+    return True
 
 
 def clear_suggestion(sid):
@@ -214,7 +231,8 @@ def main():
         elif state == "chat_done":
             save_completion(sid)
         elif state == "chat_parked":
-            save_parked(sid)
+            _, user_at = latest_user_event(hook.get("transcript_path"))
+            save_parked(sid, user_at=user_at)
             clear_suggestion(sid)
         else:
             save(sid, state, reason)
