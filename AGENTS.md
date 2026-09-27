@@ -1,4 +1,21 @@
-# Agent Board release contract
+# Agent Board synchronization and release contract
+
+## Always synchronize committed changes
+
+Every Agent Board change that is committed or published is incomplete until equivalent reviewed content is on both `main` branches:
+
+- GitLab: `gitlab@git.garena.com:stella.simsx/agent-board.git`
+- GitHub: `git@github.com:stellassx94/agent-board.git`
+
+This applies to code, documentation, configuration, build metadata, agent instructions, and release work. It is not limited to versioned releases. Do not publish to only one remote unless the user explicitly narrows the destination for that specific change.
+
+Before editing, fetch both remotes and inspect both `main` branches. Their histories may differ, so use clean isolated branches and apply the same reviewed change to each lineage; never force-push, overwrite unrelated work, or merge private GitLab-only history into public GitHub. Preserve repository-specific release links, access wording, versions, and checksums where they legitimately differ.
+
+After pushing, read back both remote refs and the changed files. Verify that the intended content is present on both. Different commit hashes are acceptable when histories differ, but the reviewed change must be semantically equivalent. If either push or verification fails, report which destination succeeded and what remains; do not call the work complete.
+
+Keep `AGENTS.md` and `CLAUDE.md` synchronized so Codex and Claude receive the same dual-remote rule.
+
+## Versioned releases
 
 When the user says **release Agent Board**, **release this**, or **release `<version>`** while working in this repository, that is explicit authorization to complete the full release workflow below unless the user narrows the destination.
 
