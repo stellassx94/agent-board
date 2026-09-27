@@ -8,12 +8,12 @@ Both options need macOS 13 or later. The [Agent Board GitHub project](https://gi
 
 ### Option A — download the ready-built app
 
-1. Open the [v0.4.8 release](https://github.com/stellassx94/agent-board/releases/tag/v0.4.8) and download **Agent Board v0.4.8 for Apple Silicon (.zip)**.
+1. Open the [v0.4.9 release](https://github.com/stellassx94/agent-board/releases/tag/v0.4.9) and download **Agent Board v0.4.9 for Apple Silicon (.zip)**.
 2. Unzip it and put `Agent Board.app` in the location where you plan to keep it. It needs neither Xcode Command Line Tools nor `uvx`.
 3. Open **System Settings → Privacy & Security → Accessibility**. Add `Agent Board.app` with the **+** button if it is not listed and switch it on. This permission is required. Then open Agent Board; if it is already running, quit and reopen it. If you move or replace the app later, macOS may ask you to grant access again.
 4. Accessibility access and Gatekeeper approval are separate. If macOS blocks this locally signed, non-notarized app, verify that it came from the official GitHub release, then use **System Settings → Privacy & Security → Open Anyway** if your Mac permits it. Do not change either setting if your company policy blocks it.
 
-The downloaded ZIP's SHA-256 is `b10a0cf8eb4ce60c88786b499d6c3e87e8acdad7119991970aa738de54304f6e`. The same source-build option remains below.
+The downloaded ZIP's SHA-256 is `ebb29b59c104e20e7b7adf2264bba7bdec4dbd93c24caad8a8222c5fc3b88fda`. The same source-build option remains below.
 
 ### Option B — build from source
 
@@ -49,9 +49,9 @@ The menu bar item opens the board and shows workstream counts. Closing the board
 
 ## Check your version and update
 
-The menu shows the installed app version and the running board service version. A warning symbol means they differ, usually because an older service is already using the local port. **View releases…** opens the public GitHub release page in your browser so you can compare versions and download the latest app. The pilot app does not install updates automatically.
+The menu shows the installed app version and the running board service version. A warning symbol means they differ, usually because an older service is already using the local port. **Check for updates…** checks the public GitHub release when you select it and shows the available version. If a newer verified Mac download exists, you can choose **Download and install**, then confirm **Install and relaunch** after the download is validated. Nothing installs on launch or without those choices. v0.4.8 and earlier still need one manual install of v0.4.9 before this updater is available.
 
-To update a downloaded app, choose **Quit Agent Board**, download the next release ZIP, and replace the old app while it is closed. To update a source-built app, quit, then run `git pull --ff-only` and `sh macos/build.sh` in your checkout. If you copied the previous app into Applications, replace that copy while it is closed. Your board choices remain in `~/.agent-board/`.
+The updater replaces only the app bundle and retains a sibling backup. It does not update separately installed optional hooks. If the updater cannot replace the app where it is installed, choose **Quit Agent Board**, download the next release ZIP, and replace the old app while it is closed. To update a source-built app, quit, then run `git pull --ff-only` and `sh macos/build.sh` in your checkout. If you copied the previous app into Applications, replace that copy while it is closed. Your board choices remain in `~/.agent-board/`.
 
 ## If something looks wrong
 
