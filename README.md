@@ -7,6 +7,12 @@ Agent Board is a local Mac app with a built-in menu bar view and board window fo
 
 ![Agent Board overview poster](docs/colleague-intro/poster.png)
 
+## Watch the demo
+
+[![Watch the 90-second Agent Board demo](docs/colleague-intro/agent-board-demo-cover.jpg)](docs/colleague-intro/agent-board-demo.mp4)
+
+Click the image to play the 90-second tour. For a player with chapters, open [`docs/colleague-intro/demo.html`](docs/colleague-intro/demo.html) from a clone or from the colleague-intro ZIP. The demo uses made-up tasks.
+
 ## Run locally
 
 1. Clone this repository to a folder on your Mac.

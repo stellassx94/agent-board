@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Board · Demo</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:#0e1330;color:#f4f5ff;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1600px;margin:0 auto;padding:0 clamp(20px,4vw,64px)}
+.hero{background:radial-gradient(circle at 88% 8%,#5f73ff 0,#5948df 18%,transparent 42%),radial-gradient(circle at 4% 90%,#3e75ff55 0,transparent 40%),linear-gradient(135deg,#10183d 0%,#21185c 64%,#4323a4 100%);padding:clamp(28px,4vw,56px) 0 clamp(40px,6vw,88px)}
+.brand{display:flex;align-items:center;gap:14px;font-weight:800;letter-spacing:.4px;font-size:18px}
+.brand img{width:48px;height:48px;border-radius:13px;box-shadow:0 10px 26px #0006}
+.brand .tag{margin-left:auto;border:1px solid #ffffff70;border-radius:999px;padding:8px 14px;font-size:13px;font-weight:700;letter-spacing:.8px}
+h1{font-size:clamp(40px,6vw,84px);line-height:1.02;letter-spacing:-.035em;margin:clamp(28px,4vw,56px) 0 16px;max-width:1100px}
+.sub{font-size:clamp(17px,1.6vw,22px);color:#c9ccf5;max-width:820px;line-height:1.5;margin:0}
+.player{position:relative;margin-top:clamp(28px,4vw,48px);border-radius:18px;overflow:hidden;box-shadow:0 40px 100px #0008,0 0 0 1px #ffffff22;background:#000;aspect-ratio:16/9;max-width:1280px}
+.player video{display:block;width:100%;height:100%}
+.play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(0deg,#0d0e1a99,#0d0e1a22 45%,transparent);border:0;cursor:pointer;color:#fff;font:inherit}
+.play span{display:flex;align-items:center;gap:14px;background:#ffffff;color:#1f1d5c;border-radius:999px;padding:16px 26px 16px 20px;font-size:18px;font-weight:750;box-shadow:0 18px 40px #0006;transition:transform .2s}
+.play:hover span{transform:scale(1.05)}
+.play svg{width:26px;height:26px}
+.play[hidden]{display:none}
+.chapters{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;max-width:1280px}
+.chapters button{background:#ffffff14;color:#e6e8ff;border:1px solid #ffffff2e;border-radius:999px;padding:9px 15px;font:600 14px/1 inherit;cursor:pointer}
+.chapters button:hover,.chapters button.on{background:#fff;color:#1f1d5c}
+.chapters b{opacity:.6;font-weight:600;margin-right:6px}
+main{background:#f7f7ff;color:#131735;padding:clamp(36px,5vw,72px) 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+.card{background:#fff;border:1px solid #e3e5f3;border-radius:16px;padding:22px 24px}
+.card .eyebrow{font-size:12px;font-weight:800;letter-spacing:1px;color:#5948df;text-transform:uppercase}
+.card strong{display:block;font-size:20px;margin:8px 0 6px}
+.card p{margin:0;color:#4b4f6e;line-height:1.5;font-size:15px}
+.card a{color:#3b3fd8;font-weight:700;word-break:break-all}
+h2{font-size:clamp(24px,2.4vw,32px);letter-spacing:-.02em;margin:0 0 18px}
+.note{margin-top:22px;background:#fff8e6;border:1px solid #f1dca6;border-radius:12px;padding:14px 18px;font-size:14px;line-height:1.5;color:#5a4a1d}
+footer{color:#7b7f9e;font-size:13px;padding:22px 0 36px;background:#f7f7ff}
+footer .wrap{display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
+</style>
+</head>
+<body>
+<section class="hero">
+  <div class="wrap">
+    <div class="brand"><img src="AgentBoardIcon.png" alt=""><span>AGENT BOARD</span><span class="tag">MAC APP · LOCAL</span></div>
+    <h1>Know which agent needs you.</h1>
+    <p class="sub">A local Mac menu bar and board for your Claude Code and Codex sessions. See what is working, what is waiting on you, and what can wait.</p>
+    <div class="player">
+      <video id="v" src="agent-board-demo.mp4" poster="agent-board-demo-cover.jpg" preload="none" playsinline controls></video>
+      <button class="play" id="play" aria-label="Play the Agent Board demo"><span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>Watch the 90-second tour</span></button>
+    </div>
+    <div class="chapters" id="chapters">
+      <button data-t="0"><b>00:00</b>Monday morning</button>
+      <button data-t="21.6"><b>00:21</b>All in one place</button>
+      <button data-t="29.9"><b>00:29</b>It's your turn</button>
+      <button data-t="44.0"><b>00:44</b>Hey, I'm stuck</button>
+      <button data-t="55.2"><b>00:55</b>Done, or later</button>
+      <button data-t="64.6"><b>01:04</b>Even when it's closed</button>
+      <button data-t="76.0"><b>01:16</b>It never leaves your Mac</button>
+    </div>
+  </div>
+</section>
+
+<main>
+  <div class="wrap">
+    <h2>Choose how to install</h2>
+    <div class="grid">
+      <div class="card"><span class="eyebrow">Option 1 · Download</span><strong>Ready-built Mac app</strong><p>Get the latest Apple Silicon ZIP, unzip it, and place the app.<br><a href="https://github.com/stellassx94/agent-board/releases">github.com/stellassx94/agent-board/releases</a></p></div>
+      <div class="card"><span class="eyebrow">Option 2 · Build yourself</span><strong>Build from source</strong><p>Clone the repo, run <code>sh macos/build.sh</code>, and place the app.<br><a href="https://github.com/stellassx94/agent-board">github.com/stellassx94/agent-board</a></p></div>
+      <div class="card"><span class="eyebrow">Stays local</span><strong>Nothing leaves your Mac</strong><p>The board reads your own session history on this Mac and serves it at <code>http://127.0.0.1:8765/</code>.</p></div>
+    </div>
+    <div class="note"><b>Required before first use:</b> System Settings → Privacy &amp; Security → Accessibility → add Agent Board and switch it on. If it is already running, quit and reopen it. This pilot build is locally signed and not notarized.</div>
+  </div>
+</main>
+<footer><div class="wrap"><span>The demo uses made-up tasks and does not show real session data.</span><span>Agent Board · colleague intro</span></div></footer>
+
+<script>
+const v = document.getElementById('v'), play = document.getElementById('play');
+const start = t => { if (t !== undefined) v.currentTime = t; play.hidden = true; v.play(); };
+play.addEventListener('click', () => start());
+v.addEventListener('play', () => { play.hidden = true; });
+document.querySelectorAll('#chapters button').forEach(b => b.addEventListener('click', () => {
+  const t = parseFloat(b.dataset.t);
+  if (v.readyState < 1) { v.preload = 'auto'; v.addEventListener('loadedmetadata', () => start(t), {once: true}); v.load(); } else start(t);
+}));
+v.addEventListener('timeupdate', () => {
+  const bs = [...document.querySelectorAll('#chapters button')];
+  let cur = bs[0]; for (const b of bs) if (v.currentTime >= parseFloat(b.dataset.t)) cur = b;
+  bs.forEach(b => b.classList.toggle('on', b === cur));
+});
+</script>
+</body>
+</html>
