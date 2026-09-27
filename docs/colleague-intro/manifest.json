@@ -7,6 +7,7 @@
     {"text": "Local menu bar and workstream board for Claude Code and Codex", "evidence": "README.md introduction and macos/AgentBoardApp.swift"},
     {"text": "Download publicly from GitHub or build using macos/build.sh", "evidence": "GitHub release and macos/build.sh"},
     {"text": "Board reads local session history and stores choices locally", "evidence": "agent_board.py configuration and README.md personal settings"},
-    {"text": "App build is locally signed and not notarized", "evidence": "macos/build.sh codesign command and README.md Mac app section"}
+    {"text": "App build is locally signed and not notarized", "evidence": "macos/build.sh codesign command and README.md Mac app section"},
+    {"text": "Mac app requires Accessibility access before first use", "evidence": "README.md required Mac app notice and docs/colleague-intro/QUICKSTART.md installation steps"}
   ]
 }
