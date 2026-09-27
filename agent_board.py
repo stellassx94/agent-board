@@ -289,6 +289,7 @@ def parse_session(path):
 
 
 ASK_TOOLS = ("AskUserQuestion", "ExitPlanMode", "request_user_input", "request_user_input_async")
+APPROVAL_GRACE_SECONDS = 10
 BG_STUCK_MIN = 45       # a background job longer than this is flagged
 BG_EXPIRE_MIN = 240     # background jobs older than this are ignored (notification likely missed)
 
@@ -311,6 +312,10 @@ def classify(s, now, ps_lines):
     asking = [p for p in s["pending"] if p["name"] in ASK_TOOLS]
     if asking:
         return "asking", "Asking you a question. Open the session to answer."
+    possible_approval = [p for p in s["pending"] if p["name"] == "codex_approval"
+                         and now - (p["ts"] or now) >= APPROVAL_GRACE_SECONDS]
+    if possible_approval:
+        return "asking", "May be awaiting approval. Open the session to check."
     if quiet > ABANDONED_MIN and s["last_kind"] != "done" and not jobs:
         return "idle", "Stopped mid-step. No activity for a long time."
     if jobs and s["last_kind"] == "done":
@@ -475,6 +480,19 @@ def codex_first_user_message(data):
     return None
 
 
+def codex_escalated_call(name, args):
+    if name == "exec_command":
+        try:
+            return json.loads(args).get("sandbox_permissions") == "require_escalated"
+        except (TypeError, ValueError, AttributeError):
+            return False
+    if name == "exec":
+        return bool(re.search(
+            r"""\btools\.exec_command\s*\(\s*\{.*?\bsandbox_permissions\s*:\s*["']require_escalated["']""",
+            args, re.S))
+    return False
+
+
 def parse_codex(path):
     st = path.stat()
     key = (st.st_mtime, st.st_size)
@@ -515,6 +533,8 @@ def parse_codex(path):
                 if pt == "user_message":
                     awaiting_question = None
                     last_user, last_user_ts = p.get("message") or "", when
+                    pending = {call_id: item for call_id, item in pending.items()
+                               if item[0] != "codex_approval"}
                 if pt == "user_message" and not first_msg:
                     first_msg = p.get("message")
             elif pt in ("task_complete", "turn_aborted"):
@@ -533,7 +553,12 @@ def parse_codex(path):
                 pending.pop(p["call_id"], None)
             elif pt.endswith("_call"):
                 args = p.get("arguments") or p.get("input") or ""
-                pending[p["call_id"]] = (p.get("name") or pt, short(str(args), 100), when)
+                name = p.get("name") or pt
+                if codex_escalated_call(name, args):
+                    name, label = "codex_approval", "Possible approval request"
+                else:
+                    label = short(str(args), 100)
+                pending[p["call_id"]] = (name, label, when)
                 if p.get("name") == "request_user_input_async":
                     awaiting_question = ("request_user_input_async", "Awaiting your answer", when)
             if last_kind != "done":
