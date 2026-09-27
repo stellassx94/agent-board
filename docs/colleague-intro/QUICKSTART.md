@@ -6,7 +6,9 @@ Agent Board puts your local Claude Code and Codex sessions into a Mac menu bar a
 
 Both options need macOS 13 or later. The [Agent Board GitHub project](https://github.com/stellassx94/agent-board) and its release downloads are public, so no repository invitation or corporate VPN is required. The ready-built app is for Apple Silicon Macs; Intel has not been tested.
 
-### Option A — download the ready-built app
+**We recommend Option A.** The ready-built app needs no developer tools, and you update it from inside the app with **Check for updates…**. Choose Option B only if you want to read or change the code.
+
+### Option A — download the ready-built app (recommended)
 
 1. Open the [v0.4.11 release](https://github.com/stellassx94/agent-board/releases/tag/v0.4.11) and download **Agent Board v0.4.11 for Apple Silicon (.zip)**.
 2. Unzip it and put `Agent Board.app` in the location where you plan to keep it. It needs neither Xcode Command Line Tools nor `uvx`.
@@ -16,6 +18,8 @@ Both options need macOS 13 or later. The [Agent Board GitHub project](https://gi
 The downloaded ZIP's SHA-256 is `ef946cf25c9b33e4e05850e52696afc57fc6848b7b7e8511c3b2ae109583148d`. The same source-build option remains below.
 
 ### Option B — build from source
+
+Choose this if you want to read or change the code. You update a source build yourself; see [Check your version and update](#check-your-version-and-update).
 
 You need Xcode Command Line Tools and `uvx` in Terminal. If you use Homebrew, `brew install uv` provides `uvx`. `xcode-select --install` installs the Apple command line tools. The build downloads pinned Python and PyInstaller versions, so it also needs package-index access.
 
@@ -51,7 +55,7 @@ The menu bar item opens the board and shows workstream counts. Closing the board
 
 The menu shows the installed app version and the running board service version. A warning symbol means they differ, usually because an older service is already using the local port. **Check for updates…** in the app window or menu bar checks the public GitHub release when you select it and shows the available version. In a regular browser, **Releases** opens the published release page instead. If a newer verified Mac download exists, you can choose **Download and install**, then confirm **Install and relaunch** after the download is validated. Nothing installs on launch or without those choices. v0.4.8 and earlier still need one manual install of v0.4.9 before this updater is available.
 
-The updater replaces only the app bundle and retains a sibling backup. It does not update separately installed optional hooks. If the updater cannot replace the app where it is installed, choose **Quit Agent Board**, download the next release ZIP, and replace the old app while it is closed. To update a source-built app, quit, then run `git pull --ff-only` and `sh macos/build.sh` in your checkout. If you copied the previous app into Applications, replace that copy while it is closed. Your board choices remain in `~/.agent-board/`.
+The updater replaces only the app bundle and retains a sibling backup. It does not update separately installed optional hooks. If the updater cannot replace the app where it is installed, choose **Quit Agent Board**, download the next release ZIP, and replace the old app while it is closed. To update a source-built app, quit, then run `git pull --ff-only` and `sh macos/build.sh` in your checkout. If you copied the previous app into Applications, replace that copy while it is closed. If you changed the code, `git pull` can conflict with new releases. Choosing **Download and install** on a source build replaces it with the ready-built app. Your board choices remain in `~/.agent-board/`.
 
 ## If something looks wrong
 
