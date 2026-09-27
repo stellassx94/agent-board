@@ -62,7 +62,7 @@ private func runTool(_ executable: String, _ arguments: [String]) throws {
     guard process.terminationStatus == 0 else { throw UpdateError.invalidBundle }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var statusItem: NSStatusItem!
@@ -117,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         statusTimer?.invalidate()
         animationTimer?.invalidate()
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "agentBoardUpdates")
         if let task = backendTask, task.isRunning {
             task.terminate()
         }
@@ -132,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             newWindow.center()
             let newWebView = WKWebView(frame: frame)
             newWebView.navigationDelegate = self
+            newWebView.configuration.userContentController.add(self, name: "agentBoardUpdates")
             newWindow.contentView = newWebView
             window = newWindow
             webView = newWebView
@@ -173,6 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
                 self.showRelease(release)
             }
         }.resume()
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let origin = message.frameInfo.securityOrigin
+        guard message.webView === webView, message.name == "agentBoardUpdates",
+              message.body as? String == "check", message.frameInfo.isMainFrame,
+              origin.`protocol` == "http", origin.host == "127.0.0.1", origin.port == boardPort
+        else { return }
+        viewReleases(nil)
     }
 
     private func showRelease(_ release: Release) {

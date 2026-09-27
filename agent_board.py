@@ -1088,6 +1088,8 @@ let navExpanded=false;
 try{account=localStorage.getItem('acct')||'all';view=localStorage.getItem('view')||'workstreams';if(!['all','claude','codex'].includes(account))account='all';if(!['workstreams','sessions'].includes(view))view='workstreams'}catch(e){}
 try{navExpanded=localStorage.getItem('navExpanded')==='true'}catch(e){}
 const $=s=>document.querySelector(s);
+const nativeUpdater=window.webkit?.messageHandlers?.agentBoardUpdates;
+if(nativeUpdater){const b=$('#releases');b.textContent='Check for updates…';b.title='Check the latest published release'}
 function updateNav(){const toggle=$('#nav-toggle');$('#app').classList.toggle('nav-expanded',navExpanded);toggle.setAttribute('aria-expanded',String(navExpanded));toggle.setAttribute('aria-label',navExpanded?'Collapse sidebar':'Expand sidebar');toggle.title=navExpanded?'Collapse sidebar':'Expand sidebar';toggle.textContent=navExpanded?'‹':'›'}
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const plain=s=>String(s??'').replace(/\*\*|`/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1');
@@ -1158,7 +1160,7 @@ let linkChild=null;
 function linkResults(){const q=$('#link-search').value.toLowerCase().trim(),current=data.sessions.find(s=>s.id===linkChild)?.workstream_id;$('#link-results').innerHTML=data.workstreams.filter(w=>w.id!==linkChild&&w.id!==current&&(!q||w.title.toLowerCase().includes(q))).slice(0,30).map(w=>`<button type="button" class="action" data-action="linktarget" data-id="${escapeHTML(w.id)}">${escapeHTML(w.title)} · ${w.session_count} sessions</button>`).join('')||'<div class="empty">No matching workstreams</div>'}
 document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;
  if(b.id==='nav-toggle'){navExpanded=!navExpanded;try{localStorage.setItem('navExpanded',String(navExpanded))}catch(e){}updateNav();return}
- if(b.id==='releases'){$('#release-service-version').textContent=data?.version||'offline';$('#releases-dialog').showModal();return}
+ if(b.id==='releases'){if(nativeUpdater){nativeUpdater.postMessage('check')}else{$('#release-service-version').textContent=data?.version||'offline';$('#releases-dialog').showModal()}return}
  if(b.id==='releases-close'){$('#releases-dialog').close();return}
  if(b.dataset.select){selected=b.dataset.select;render();return}if(b.dataset.agent){account=b.dataset.agent;try{localStorage.setItem('acct',account)}catch(e){}render();return}if(b.dataset.view){view=b.dataset.view;selected=null;try{localStorage.setItem('view',view)}catch(e){}render();return}
  if(b.dataset.nav){document.querySelectorAll('[data-nav]').forEach(x=>x.classList.toggle('selected',x===b));const section=document.getElementById(b.dataset.nav);if(section?.tagName==='DETAILS')section.open=true;section?.scrollIntoView({behavior:'smooth'});return}if(b.dataset.jump){const section=document.getElementById(b.dataset.jump);if(section?.tagName==='DETAILS')section.open=true;section?.scrollIntoView({behavior:'smooth'});return}

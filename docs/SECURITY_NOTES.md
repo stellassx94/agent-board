@@ -10,7 +10,7 @@ Revisit this before using Agent Board on shared Macs or expanding its local API.
 
 ## App updater trust model
 
-The Mac app checks for updates only when the user selects **Check for updates**. It reads the latest non-draft, non-prerelease version from the public `stellassx94/agent-board` GitHub release API over HTTPS. It shows the version before offering a separate **Download and install** action and requires a final **Install and relaunch** confirmation. It never installs on launch or in the background.
+The Mac app checks for updates only when the user selects **Check for updates** in the menu bar or in the app window. In a regular browser, the board instead links to published releases; it cannot invoke the native installer. The Mac app reads the latest non-draft, non-prerelease version from the public `stellassx94/agent-board` GitHub release API over HTTPS. It shows the version before offering a separate **Download and install** action and requires a final **Install and relaunch** confirmation. It never installs on launch or in the background.
 
 The updater accepts only the expected Apple Silicon ZIP URL for that exact release. It verifies the downloaded byte count and SHA-256 against GitHub's release-asset digest, rejects unexpected archive paths, and checks the extracted app's bundle identifier, app version, bundled service version, and macOS code-signature structure before copying it beside the current app. The old app is retained as a sibling backup; if the swap or relaunch command fails, the helper attempts to restore it. It does not modify `~/.agent-board/`, and it cannot replace an app in a read-only or unwritable location.
 
