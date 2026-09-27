@@ -2,6 +2,9 @@
 
 Agent Board is a local Mac app with a built-in menu bar view and board window for Claude Code and Codex sessions. Its Python service reads session files on your Mac and serves the board at `http://127.0.0.1:8765/`. SwiftBar is not needed.
 
+> [!IMPORTANT]
+> **Required for the Mac app:** After putting `Agent Board.app` in its final location, open **System Settings → Privacy & Security → Accessibility**. Add `Agent Board.app` with the **+** button if it is not listed and switch it on. Then open Agent Board; if it is already running, quit and reopen it. If you move or replace the app later, macOS may ask you to grant access again.
+
 ![Agent Board overview poster](docs/colleague-intro/poster.png)
 
 ## Run locally
@@ -42,7 +45,9 @@ This repository contains source and examples only. Do not commit local session l
 
 ## Mac app
 
-For an Apple Silicon Mac running macOS 13 or later, choose either the [ready-built v0.4.5 app](https://github.com/stellassx94/agent-board/releases/tag/v0.4.5) or a local source build. The ready-built ZIP is attached to the public GitHub release and does not require VPN, Xcode Command Line Tools, `uvx`, Python, or SwiftBar. Its SHA-256 is `1fbcb13148e172f4e4a12596eb06e5d275711385839105b2ed68e38bd0bd1566`. Unzip it and open `Agent Board.app`. The app is locally signed but not Apple-notarized, so macOS may require an explicit **Open Anyway** decision in System Settings → Privacy & Security. Only open a copy downloaded from the official release.
+For an Apple Silicon Mac running macOS 13 or later, choose either the [ready-built v0.4.5 app](https://github.com/stellassx94/agent-board/releases/tag/v0.4.5) or a local source build. The ready-built ZIP is attached to the public GitHub release and does not require VPN, Xcode Command Line Tools, `uvx`, Python, or SwiftBar. Its SHA-256 is `1fbcb13148e172f4e4a12596eb06e5d275711385839105b2ed68e38bd0bd1566`. Unzip it and put `Agent Board.app` in the location where you plan to keep it. Then grant it the required **Accessibility** access using the steps at the top of this README and reopen the app.
+
+Accessibility access and Gatekeeper approval are separate. Because the app is locally signed but not Apple-notarized, macOS may also block the first launch. If that happens, verify that you downloaded it from the official release, then use **System Settings → Privacy & Security → Open Anyway**. Do not change either setting if your company policy blocks it.
 
 To build it yourself on macOS with Xcode Command Line Tools and `uvx`, run `sh macos/build.sh`, then open `build/Agent Board.app`. The default build uses pinned PyInstaller to bundle the Python service and runtime. The app starts its service when needed and shows workstream counts in its own menu bar item. The board window has a compact workspace view: empty sections collapse, empty attention subgroups are hidden, and the sidebar starts collapsed. The menu bar uses amber `?` for Asking you, red `!` for Check me, blue `↩` for Your turn, green `✦` for Working, and `📌` for Continue later; zero counts stay hidden. Working and the highest-priority attention symbol pulse gently unless Reduce Motion is enabled. Closing the board window keeps the menu running; Quit Agent Board stops a service started by the app. Use the native menu’s Launch at Login toggle to keep it available after sign-in. Set `AGENT_BOARD_BUNDLE_RUNTIME=0` only for a development build that uses an installed Python 3. The build targets the current Mac architecture and is signed locally, but it is not notarized. Set `AGENT_BOARD_APP_PATH` to build elsewhere.
 

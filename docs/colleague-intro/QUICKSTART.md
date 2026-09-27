@@ -9,8 +9,9 @@ Both options need macOS 13 or later. The [Agent Board GitHub project](https://gi
 ### Option A — download the ready-built app
 
 1. Open the [v0.4.5 release](https://github.com/stellassx94/agent-board/releases/tag/v0.4.5) and download **Agent Board v0.4.5 for Apple Silicon (.zip)**.
-2. Unzip it and open `Agent Board.app`. It needs neither Xcode Command Line Tools nor `uvx`.
-3. If macOS blocks this locally signed, non-notarized pilot app, verify that it came from the official GitHub release, then use **System Settings → Privacy & Security → Open Anyway** if your Mac permits it. Do not change security settings if your company policy blocks it.
+2. Unzip it and put `Agent Board.app` in the location where you plan to keep it. It needs neither Xcode Command Line Tools nor `uvx`.
+3. Open **System Settings → Privacy & Security → Accessibility**. Add `Agent Board.app` with the **+** button if it is not listed and switch it on. This permission is required. Then open Agent Board; if it is already running, quit and reopen it. If you move or replace the app later, macOS may ask you to grant access again.
+4. Accessibility access and Gatekeeper approval are separate. If macOS blocks this locally signed, non-notarized app, verify that it came from the official GitHub release, then use **System Settings → Privacy & Security → Open Anyway** if your Mac permits it. Do not change either setting if your company policy blocks it.
 
 The downloaded ZIP's SHA-256 is `1fbcb13148e172f4e4a12596eb06e5d275711385839105b2ed68e38bd0bd1566`. The same source-build option remains below.
 
@@ -26,6 +27,8 @@ open "build/Agent Board.app"
 ```
 
 The build bundles the Python service and runtime. A colleague running the built app does not need to install Python or SwiftBar. The build is for the Mac architecture used to create it. The pilot app is locally signed and has not been notarized.
+
+Before first use, open **System Settings → Privacy & Security → Accessibility**, add `build/Agent Board.app` with the **+** button if needed, and switch it on. Then open Agent Board; if it is already running, quit and reopen it. If you later copy the app to Applications, grant Accessibility access to that final copy.
 
 If you want the app in your personal Applications folder after trying it:
 
