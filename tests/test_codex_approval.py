@@ -7,7 +7,7 @@ from unittest import mock
 import agent_board as board
 
 
-SID = "01a0e14b-5738-7811-bbdb-a72bea4a8c5c"
+SID = "00000000-0000-4000-8000-000000000001"
 START = "2026-09-27T07:00:00Z"
 CALL = "2026-09-27T07:00:01Z"
 OUTPUT = "2026-09-27T07:00:15Z"
@@ -46,7 +46,7 @@ class CodexApprovalTests(unittest.TestCase):
                                                        "call_id": "call-1", "output": "ok"}))
         self.assertEqual("working", board.classify(answered, board.ts(OUTPUT) + 1, [])[0])
 
-    def test_laya_wrapper_and_completion(self):
+    def test_wrapper_escalation_and_completion(self):
         call = ("custom_tool_call", "exec", "input",
                 'const r=await tools.exec_command({cmd:"gh release view",'
                 'sandbox_permissions:"require_escalated",justification:"May I verify?"});text(r)')
