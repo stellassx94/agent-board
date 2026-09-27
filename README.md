@@ -5,7 +5,9 @@ Agent Board is a local Mac app with a built-in menu bar view and board window fo
 > [!IMPORTANT]
 > **Required for the Mac app:** After putting `Agent Board.app` in its final location, open **System Settings → Privacy & Security → Accessibility**. Add `Agent Board.app` with the **+** button if it is not listed and switch it on. Then open Agent Board; if it is already running, quit and reopen it. If you move or replace the app later, macOS may ask you to grant access again.
 
-![Agent Board overview poster](docs/colleague-intro/poster.png)
+[![Agent Board overview poster](docs/colleague-intro/poster.png)](AgentBoard-poster.pdf)
+
+Click the poster for a [PDF version](AgentBoard-poster.pdf) with working links.
 
 ## Watch the demo
 
@@ -63,4 +65,4 @@ See [Security notes](docs/SECURITY_NOTES.md) for the deferred local API key deci
 
 ## Colleague pilot intro
 
-Share the [one-page poster](docs/colleague-intro/poster.png) with colleagues who want to try Agent Board. The [quickstart](docs/colleague-intro/QUICKSTART.md) covers prerequisites, installation, first actions, and troubleshooting. A [ready-to-forward message](docs/colleague-intro/SHARE_MESSAGE.txt) and a [ZIP pack](docs/colleague-intro.zip) are also available. The project and release download are public on GitHub; no repository invitation or corporate VPN is required.
+Share the [one-page poster](docs/colleague-intro/poster.png) (or its [PDF version with working links](AgentBoard-poster.pdf)) with colleagues who want to try Agent Board. The [quickstart](docs/colleague-intro/QUICKSTART.md) covers prerequisites, installation, first actions, and troubleshooting. A [ready-to-forward message](docs/colleague-intro/SHARE_MESSAGE.txt) and a [ZIP pack](docs/colleague-intro.zip) are also available. The project and release download are public on GitHub; no repository invitation or corporate VPN is required.
