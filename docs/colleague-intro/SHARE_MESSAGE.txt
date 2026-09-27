@@ -1,0 +1,5 @@
+I’m piloting Agent Board, a local Mac menu bar and workstream view for Claude Code and Codex sessions. It helps you spot what is working, what needs you, and what to continue later. Your board reads your own Mac’s session history.
+
+The project and download are public, with no corporate VPN required. Download the ready-built Apple Silicon app from https://github.com/stellassx94/agent-board/releases/tag/v0.4.5 or build it yourself from https://github.com/stellassx94/agent-board.git. The attached QUICKSTART.md explains both options.
+
+Could you try it and tell me: (1) where install was confusing, (2) whether any session was missing, and (3) whether any status looked wrong? This is a pilot build and has not been notarized.

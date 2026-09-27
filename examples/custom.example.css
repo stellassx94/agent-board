@@ -1,0 +1,10 @@
+/* Copy to ~/.agent-board/custom.css. This file is yours across updates. */
+:root {
+  --bg: #f3f5f9;
+  --card: #ffffff;
+  --ink: #141a26;
+  --blue: #2f6fde;
+}
+
+/* Example: show more cards per row. */
+/* .grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); } */

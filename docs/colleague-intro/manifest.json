@@ -1,0 +1,12 @@
+{
+  "title": "See what your agents are doing at a glance.",
+  "mode": "editorial",
+  "source": "Agent Board source, README and macOS build script",
+  "as_of": "2026-09-27",
+  "claims": [
+    {"text": "Local menu bar and workstream board for Claude Code and Codex", "evidence": "README.md introduction and macos/AgentBoardApp.swift"},
+    {"text": "Download publicly from GitHub or build using macos/build.sh", "evidence": "GitHub release and macos/build.sh"},
+    {"text": "Board reads local session history and stores choices locally", "evidence": "agent_board.py configuration and README.md personal settings"},
+    {"text": "App build is locally signed and not notarized", "evidence": "macos/build.sh codesign command and README.md Mac app section"}
+  ]
+}

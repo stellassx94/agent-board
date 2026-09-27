@@ -1,0 +1,21 @@
+# Personal settings and session state belong outside the repository.
+config.json
+custom.css
+agent_board_flags.json
+agent_board_completed.json
+agent_board_choices.json
+agent_board_suggestions.json
+agent_board_suggestions.lock
+agent_board_lineage.json
+agent_board_lineage.lock
+*.jsonl
+*.log
+.env
+.env.*
+*.pem
+*.key
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+build/
