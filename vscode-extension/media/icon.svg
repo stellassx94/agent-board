@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="200 230 854 790">
+  <defs>
+    <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254">
+      <g fill="#fff" stroke="#fff" stroke-width="44" stroke-linejoin="round">
+        <polygon points="545,287 709,287 825,582 800,603 454,603 429,582"/>
+        <polygon points="350,682 555,682 566,700 478,963 262,963 256,945"/>
+        <polygon points="904,682 699,682 688,700 776,963 992,963 998,945"/>
+      </g>
+      <g fill="#000" stroke="#000">
+        <circle cx="627" cy="498" r="66"/>
+        <circle cx="440" cy="788" r="66"/>
+        <circle cx="814" cy="788" r="66"/>
+        <line x1="627" y1="498" x2="440" y2="788" stroke-width="56" stroke-linecap="round"/>
+        <line x1="627" y1="498" x2="814" y2="788" stroke-width="56" stroke-linecap="round"/>
+      </g>
+    </mask>
+  </defs>
+  <rect x="0" y="0" width="1254" height="1254" fill="currentColor" mask="url(#m)"/>
+</svg>
