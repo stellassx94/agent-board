@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote
 import agent_board_workstreams as ws
 import agent_board_classify as turn_classifier
 
@@ -194,6 +196,8 @@ def parse_session(path):
             pass
     m = re.search(rb'"cwd":"((?:[^"\\]|\\.)*)"', data)
     start_cwd = json.loads(b'"' + m.group(1) + b'"') if m else None
+    m = re.search(rb'"entrypoint":"([A-Za-z0-9_-]{1,40})"', data)
+    entrypoint = m.group(1).decode() if m else None
     tail = data[-TAIL_BYTES:]
     lines = tail.split(b"\n")
     if len(data) > TAIL_BYTES:
@@ -272,6 +276,7 @@ def parse_session(path):
         "project": Path(start_cwd or cwd).name if (start_cwd or cwd) else path.parent.name.split("-")[-1],
         "root": path.parent.parent.parent.name,
         "cwd": start_cwd or cwd,
+        "entrypoint": entrypoint,
         "last_kind": last_kind,
         "last_ts": last_ts,
         "last_user": last_user,
@@ -692,6 +697,93 @@ def open_session(sid, hours):
     except (OSError, subprocess.SubprocessError):
         return False
     return True
+
+
+def resume_surface(row):
+    """Name the app a session came from, so its resume chat opens there too."""
+    if row["root"] == "codex":
+        origin = row.get("originator") or ""
+        if origin == "Codex Desktop":
+            return "codex-app"
+        return "codex-vscode" if "vscode" in origin else "codex-cli"
+    entry = row.get("entrypoint") or ""
+    if entry == "claude-vscode":
+        return "claude-vscode"
+    if entry == "cli":
+        return "claude-cli"
+    return "claude-app"
+
+
+def resume_prompt(row):
+    kind = "codex" if row["root"] == "codex" else "claude"
+    snap = Path.home() / ".agent-handoffs" / f"{kind}-{row['id']}.md"
+    return (f"Use the resume skill to pick up session {row['id']}. "
+            f"Snapshot: {snap}")
+
+
+def resume_in_new_chat(sid, hours):
+    """Start a new chat in the session's own app with a resume prompt.
+
+    Returns "sent" when the prompt was placed in the new chat, "copied" when
+    the app has no prompt link and the prompt is on the clipboard, or None.
+    """
+    snapshot = _recent_status
+    row = next((r for r in snapshot[2] if r["id"] == sid), None) if snapshot else None
+    if row is None:
+        row = next((r for r in status(hours)["sessions"] if r["id"] == sid), None)
+    if not row or sys.platform != "darwin":
+        return None
+    prompt = resume_prompt(row)
+    cwd = row.get("cwd") if row.get("cwd") and os.path.isdir(row["cwd"]) else None
+    surface = resume_surface(row)
+    try:
+        if surface == "claude-app":
+            url = "claude://code/new?source=agent_board&q=" + quote(prompt)
+            if cwd:
+                url += "&folder=" + quote(cwd)
+            subprocess.run(["open", url], check=True, timeout=15)
+        elif surface == "codex-app":
+            url = "codex://new?prompt=" + quote(prompt)
+            if cwd:
+                url += "&path=" + quote(cwd)
+            subprocess.run(["open", url], check=True, timeout=15)
+        elif surface in ("claude-vscode", "codex-vscode"):
+            if surface == "claude-vscode":
+                url = "vscode://anthropic.claude-code/open?prompt=" + quote(prompt)
+            else:
+                # The Codex extension has no link that fills a new chat, so hand
+                # the prompt over through the clipboard and bring Codex forward.
+                url = "vscode://openai.chatgpt/"
+                subprocess.run(["pbcopy"], input=prompt.encode(), check=True, timeout=15)
+            user_data = (CONFIG.get("vscode_user_data_dirs") or {}).get(row["root"])
+            # As in open_session, focus the session's folder window first so the
+            # new chat starts in the right workspace.
+            if not user_data:
+                if cwd:
+                    subprocess.run(["open", "-a", "Visual Studio Code", cwd], check=True, timeout=15)
+                    time.sleep(1.5)
+                subprocess.run(["open", url], check=True, timeout=15)
+            else:
+                cli = (CONFIG.get("vscode_cli") or shutil.which("code") or
+                       "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
+                if not Path(cli).is_file():
+                    return None
+                base = [cli, "--user-data-dir", str(Path(user_data).expanduser())]
+                if cwd:
+                    subprocess.run(base + [cwd], check=True, timeout=15)
+                    time.sleep(1.5)
+                subprocess.run(base + ["--open-url", url], check=True, timeout=15)
+            if surface == "codex-vscode":
+                return "copied"
+        else:
+            tool = "codex" if surface == "codex-cli" else "claude"
+            cmd = (f"cd {shlex.quote(cwd)} && " if cwd else "") + f"{tool} {shlex.quote(prompt)}"
+            script = cmd.replace("\\", "\\\\").replace('"', '\\"')
+            subprocess.run(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
+                            "-e", 'tell application "Terminal" to activate'], check=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return "sent"
 
 
 FLAGS_FILE = DATA_DIR / "agent_board_flags.json"
@@ -1115,7 +1207,7 @@ const count=(id,n)=>{const el=$('#'+id);if(el){el.textContent=n;if(el.classList.
 function row(x){const b=bucketOf(x),tone=TONE[b]||'idle';return `<button type="button" class="work-row ${tone}${selected===x.id?' selected':''}" data-select="${escapeHTML(x.id)}" aria-pressed="${selected===x.id}"><span class="row-marker"></span><span class="row-copy"><strong>${escapeHTML(titleOf(x))}</strong><small>${escapeHTML(detailOf(x))}</small></span><span class="row-end"><span class="agent">${escapeHTML(rootsOf(x))}</span>${escapeHTML(activityOf(x))}<span class="arrow">›</span></span></button>`}
 function suggestion(s){if(!s?.suggestion||s.choice==='dismiss')return '';return `<div class="suggestion"><strong>Suggested: ${escapeHTML(SUGGEST[s.suggestion.state]||'Uncertain')}</strong>${escapeHTML(s.suggestion.reason)}<br>Review the session before choosing a state.</div>`}
 function action(cls,id,label,extra=''){
- const help={open:'Open the latest linked session.',groupfinish:'Confirm this workstream is complete. Only you can mark it done.',finish:'Manually mark this session done.',continue:label.startsWith('Undo')?'Remove this saved follow-up.':'Save this work for follow-up. It remains open until you change its state.',temporary:label.startsWith('Undo')?'Move this work out of Temporary.':'Move this work out of active lists. It returns if the session resumes.',dismiss:'Hide this advisory suggestion. The work stays open.',star:label==='Remove star'?'Remove the star and its follow-up note.':'Star this workstream for Continue later and optionally add a note.',link:'Link this session to an earlier workstream.',unlink:'Remove the confirmed session link.',accept:'Confirm this suggested session link.',reject:'Dismiss this suggested link without changing the sessions.'};
+ const help={open:'Open the latest linked session.',resumenew:'Start a new chat in the same app and run the resume skill for this session.',groupfinish:'Confirm this workstream is complete. Only you can mark it done.',finish:'Manually mark this session done.',continue:label.startsWith('Undo')?'Remove this saved follow-up.':'Save this work for follow-up. It remains open until you change its state.',temporary:label.startsWith('Undo')?'Move this work out of Temporary.':'Move this work out of active lists. It returns if the session resumes.',dismiss:'Hide this advisory suggestion. The work stays open.',star:label==='Remove star'?'Remove the star and its follow-up note.':'Star this workstream for Continue later and optionally add a note.',link:'Link this session to an earlier workstream.',unlink:'Remove the confirmed session link.',accept:'Confirm this suggested session link.',reject:'Dismiss this suggested link without changing the sessions.'};
  const description=help[cls]||label,display=cls==='star'?(label==='Remove star'?'★':'☆'):label,on=cls==='star'&&label==='Remove star';
  return `<button type="button" class="action ${cls}${on?' is-on':''}" data-action="${cls}" data-id="${escapeHTML(id)}" aria-label="${escapeHTML(label)}" data-tooltip="${escapeHTML(description)}" ${extra}>${display}</button>`
 }
@@ -1143,7 +1235,7 @@ function detail(x){if(!x)return '<div class="empty">Select a workstream to see i
  const status=b==='yourturn'&&x.needs_completion?'Your turn':LABEL[b]||'Idle';
  const context=b==='asking'?'The agent is asking a question or permission. Open the latest session to respond.':b==='check'?'The session may need intervention. Open it to verify what is happening.':b==='yourturn'?'The agent replied. Review the result and decide the next step.':b==='idle'?'There is no recent activity. Idle does not mean complete.':detailOf(x);
  const completionConfirmed=x.completed||(isGroup&&l?.completed),completionSource=x.completed?x.completion_source:l?.completion_source,completionText=!completionConfirmed?'Not confirmed':completionSource==='chat-parked'?'Session done · starred for later':completionSource==='chat-closeout'?'Confirmed from chat':'Confirmed by you';
- return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'blue',active:'green',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
+ return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'blue',active:'green',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${action('resumenew',last?.id||x.id,'Resume in new chat ↻')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${action('resumenew',s.id,'Resume new ↻')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
 function render(){if(!data)return;hideActionTooltip();const items=(view==='workstreams'?data.workstreams:data.sessions).filter(visible),groups=Object.fromEntries(Object.keys(LABEL).map(k=>[k,items.filter(x=>x.bucket===k)]));
  if(!items.some(x=>x.id===selected))selected=items.find(x=>['asking','check','yourturn'].includes(x.bucket))?.id||items[0]?.id||null;
  for(const [bucket,id] of Object.entries({asking:'ask',check:'check',yourturn:'review',active:'work',pending:'later',idle:'idle',completed:'done',temporary:'temporary',suggested:'suggested'})){const xs=groups[bucket],list=$('#list-'+id),head=document.querySelector(`[data-group="${bucket}"]`);list.innerHTML=xs.map(row).join('');list.hidden=xs.length===0;if(head)head.hidden=xs.length===0;count('count-'+id,xs.length);count('metric-'+id,xs.length)}
@@ -1170,6 +1262,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.dataset.select){selected=b.dataset.select;render();return}if(b.dataset.agent){account=b.dataset.agent;try{localStorage.setItem('acct',account)}catch(e){}render();return}if(b.dataset.view){view=b.dataset.view;selected=null;try{localStorage.setItem('view',view)}catch(e){}render();return}
  if(b.dataset.nav){document.querySelectorAll('[data-nav]').forEach(x=>x.classList.toggle('selected',x===b));const section=document.getElementById(b.dataset.nav);if(section?.tagName==='DETAILS')section.open=true;section?.scrollIntoView({behavior:'smooth'});return}if(b.dataset.jump){const section=document.getElementById(b.dataset.jump);if(section?.tagName==='DETAILS')section.open=true;section?.scrollIntoView({behavior:'smooth'});return}
  const a=b.dataset.action;if(!a)return;const id=b.dataset.id;try{
+ if(a==='resumenew'){const original=b.textContent;b.textContent='Starting…';const r=await fetch('/api/resume-new?id='+encodeURIComponent(id),{method:'POST'});const j=r.ok?await r.json():{};b.textContent=j.mode==='copied'?'Copied — paste in new Codex chat':r.ok?'New chat ready ✓ press Enter':'Could not start';setTimeout(()=>b.textContent=original,4000);return}
  if(a==='open'){const original=b.textContent;b.textContent='Opening…';const r=await fetch('/api/open?id='+encodeURIComponent(id),{method:'POST'});b.textContent=r.ok?'Opened ✓':'Could not open';setTimeout(()=>b.textContent=original,2500);return}
  if(a==='groupfinish')await post('/api/group-complete',{id,on:b.dataset.on==='1'});
  else if(a==='finish')await post('/api/complete',{id,on:b.dataset.on==='1'});
@@ -1198,6 +1291,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self.local_request():
+            return
+        if self.path.startswith("/api/resume-new"):
+            m = re.search(r"[?&]id=([0-9a-fA-F-]{36})", self.path)
+            mode = resume_in_new_chat(m.group(1), self.hours) if m else None
+            body = json.dumps({"mode": mode}).encode()
+            self.send_response(200 if mode else 404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path.startswith("/api/open"):
             m = re.search(r"[?&]id=([0-9a-fA-F-]{36})", self.path)
