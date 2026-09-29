@@ -3,7 +3,7 @@ const http = require("http");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 
 const GROUPS = [
   { key: "asking", label: "Asking you", color: "charts.yellow", open: true },
@@ -23,6 +23,21 @@ function appScript() {
   const rel = "Agent Board.app/Contents/Resources/Backend/agent_board.py";
   const found = [path.join(os.homedir(), "Applications", rel), path.join("/Applications", rel)].find((p) => fs.existsSync(p));
   return found || path.join(os.homedir(), "Applications", rel);
+}
+
+// The installed app bundle, unless the user points the sidebar at another script.
+function appBundle() {
+  if (vscode.workspace.getConfiguration("agentBoard").get("scriptPath", "")) return null;
+  const app = path.resolve(appScript(), "../../../..");
+  return fs.existsSync(app) ? app : null;
+}
+
+function appVersion(app) {
+  try {
+    return fs.readFileSync(path.join(app, "Contents/Resources/Backend/VERSION"), "utf8").trim();
+  } catch (e) {
+    return null;
+  }
 }
 
 function cfg() {
@@ -138,17 +153,50 @@ function startBoard() {
   if (Date.now() - startedAt < 60000) return;
   startedAt = Date.now();
   const { script, port } = cfg();
+  const app = appBundle();
   try {
-    const child = spawn("python3", [script, "--no-open", "--port", String(port)], {
-      cwd: path.dirname(script),
-      detached: true,
-      stdio: "ignore",
-    });
+    // Let the app own its service. Running the bundled Python here writes
+    // __pycache__ into the signed app and leaves a copy the updater cannot stop.
+    const env = port === 8765 ? [] : ["--env", "AGENT_BOARD_PORT=" + port];
+    const child = app
+      ? spawn("/usr/bin/open", ["-g", "-j", ...env, app], { detached: true, stdio: "ignore" })
+      : spawn("python3", ["-B", script, "--no-open", "--port", String(port)], {
+          cwd: path.dirname(script),
+          detached: true,
+          stdio: "ignore",
+          env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+        });
     child.on("error", () => {});
     child.unref();
   } catch (e) {
     // ignore; the tree shows the error
   }
+}
+
+let staleCheckedAt = 0;
+
+// After an app update, a service started from the old bundle can keep the port.
+// Stop it only when it runs from inside the installed app, then let the app restart it.
+function stopStaleService(running) {
+  const app = appBundle();
+  const installed = app && appVersion(app);
+  if (!installed || !running || running === installed || Date.now() - staleCheckedAt < 300000) return;
+  staleCheckedAt = Date.now();
+  const inside = path.join(app, "Contents/Resources") + path.sep;
+  execFile("/usr/sbin/lsof", ["-nP", `-iTCP:${cfg().port}`, "-sTCP:LISTEN", "-t"], (err, out) => {
+    if (err) return;
+    for (const pid of out.split(/\s+/).filter((x) => /^\d+$/.test(x))) {
+      execFile("/bin/ps", ["-o", "command=", "-p", pid], (e, command) => {
+        if (e || !command.includes(inside)) return;
+        try {
+          process.kill(Number(pid), "SIGTERM");
+          startedAt = 0;
+        } catch (x) {
+          // ignore; the next refresh reports the service state
+        }
+      });
+    }
+  });
 }
 
 function activate(context) {
@@ -160,6 +208,7 @@ function activate(context) {
     try {
       const data = JSON.parse(await request("GET", "/api/status"));
       provider.set(data, null);
+      stopStaleService(data.version);
       const n = data.sessions.filter((s) => ["asking", "check", "yourturn"].includes(s.bucket)).length;
       view.badge = n ? { value: n, tooltip: `${n} need you` } : undefined;
     } catch (e) {

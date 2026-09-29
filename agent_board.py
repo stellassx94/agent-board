@@ -169,10 +169,12 @@ def parse_session(path):
     st = path.stat()
     sub = path.with_suffix("")  # sibling folder with subagent logs
     act = st.st_mtime
+    sub_act = 0
     if sub.is_dir():
         for p in sub.rglob("*.jsonl"):
             try:
-                act = max(act, p.stat().st_mtime)
+                sub_act = max(sub_act, p.stat().st_mtime)
+                act = max(act, sub_act)
             except OSError:
                 pass
     key = (st.st_mtime, st.st_size)
@@ -182,6 +184,7 @@ def parse_session(path):
         # A transcript can be touched by reconnect, bridge, or cost metadata.
         # Only meaningful conversation events should refresh board activity.
         info["activity"] = info["last_ts"] or act
+        info["sub_activity"] = sub_act
         return info
 
     with open(path, "rb") as f:
@@ -286,6 +289,7 @@ def parse_session(path):
         "pending": [{"name": n, "label": tool_label(n, i), "cmd": (i or {}).get("command", ""), "ts": w}
                     for n, i, w in pending.values()],
         "activity": last_ts or act,
+        "sub_activity": sub_act,
         "bg": [{"name": n, "label": tool_label(n, i), "cmd": (i or {}).get("command", ""), "ts": w}
                for n, i, w in bg.values()],
     }
@@ -295,6 +299,7 @@ def parse_session(path):
 
 ASK_TOOLS = ("AskUserQuestion", "ExitPlanMode", "request_user_input", "request_user_input_async")
 APPROVAL_GRACE_SECONDS = 10
+PROMPT_SLACK_SECONDS = 1
 BG_STUCK_MIN = 45       # a background job longer than this is flagged
 BG_EXPIRE_MIN = 240     # background jobs older than this are ignored (notification likely missed)
 
@@ -311,7 +316,19 @@ def live_bg(s, now, ps_lines):
     return out
 
 
-def classify(s, now, ps_lines):
+def permission_waiting(s, prompt, ps_lines):
+    """True when a Claude permission prompt was shown after the latest activity."""
+    if not prompt or not s["pending"]:
+        return False
+    reference = s["activity"]
+    if any(p["name"] in ("Agent", "Task") for p in s["pending"]):
+        reference = max(reference, s.get("sub_activity") or 0)
+    if (prompt.get("at") or 0) < reference - PROMPT_SLACK_SECONDS:
+        return False
+    return not any(p["name"] == "Bash" and command_alive(p["cmd"], ps_lines) is True for p in s["pending"])
+
+
+def classify(s, now, ps_lines, prompt=None):
     quiet = (now - s["activity"]) / 60
     jobs = live_bg(s, now, ps_lines)
     asking = [p for p in s["pending"] if p["name"] in ASK_TOOLS]
@@ -321,6 +338,8 @@ def classify(s, now, ps_lines):
                          and now - (p["ts"] or now) >= APPROVAL_GRACE_SECONDS]
     if possible_approval:
         return "asking", "May be awaiting approval. Open the session to check."
+    if permission_waiting(s, prompt, ps_lines):
+        return "asking", "Waiting for your permission. Open the session to allow or deny."
     if quiet > ABANDONED_MIN and s["last_kind"] != "done" and not jobs:
         return "idle", "Stopped mid-step. No activity for a long time."
     if jobs and s["last_kind"] == "done":
@@ -338,8 +357,6 @@ def classify(s, now, ps_lines):
         age = (now - (p["ts"] or now)) / 60
         alive = command_alive(p["cmd"], ps_lines) if p["name"] == "Bash" else None
         what = f"{p['name']}: {p['label']}"
-        if p["name"] == "Bash" and alive is False and age * 60 >= APPROVAL_GRACE_SECONDS:
-            return "asking", f"May be awaiting approval. Open the session to check. {what}"
         if p["name"] == "Bash" and alive is False and age > 1:
             return "check", f"Command is no longer running, but the session did not continue ({age:.0f} min). {what}"
         if age > STUCK_MIN:
@@ -824,6 +841,7 @@ FLAGS_FILE = DATA_DIR / "agent_board_flags.json"
 COMPLETED_FILE = DATA_DIR / "agent_board_completed.json"
 CHOICES_FILE = DATA_DIR / "agent_board_choices.json"
 SUGGESTIONS_FILE = DATA_DIR / "agent_board_suggestions.json"
+PROMPTS_FILE = Path(os.environ.get("AGENT_BOARD_PROMPTS_FILE", str(DATA_DIR / "agent_board_prompts.json"))).expanduser()
 _completed_lock = threading.Lock()
 _flags_lock = threading.Lock()
 
@@ -879,6 +897,14 @@ def load_completed():
 def load_choices():
     try:
         return json.loads(CHOICES_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def load_prompts():
+    try:
+        data = json.loads(PROMPTS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -1032,6 +1058,7 @@ def status(hours):
     completed = load_completed()
     choices = load_choices()
     suggestions = load_suggestions()
+    prompts = load_prompts()
     # v0.4.6-dev briefly allowed fallback closeouts to land as suggestions.
     # Promote those records once, preserving their original timestamp so a
     # later substantive user message still reopens the session.
@@ -1068,7 +1095,7 @@ def status(hours):
                 s["title"] = claude_display_title(p, s["title"], app_titles)
             except Exception:
                 continue
-            state, detail = classify(s, now, ps_lines)
+            state, detail = classify(s, now, ps_lines, prompts.get(s["id"]))
             if park_requested(s, completed, now):
                 flags = load_flags()
                 suggestions.pop(s["id"], None)

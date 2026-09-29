@@ -75,15 +75,73 @@ class ClaudeStateTests(unittest.TestCase):
         self.assertEqual("tool", parsed["last_kind"])
         self.assertEqual("running", board.classify(parsed, now, [])[0])
 
-    def test_unstarted_bash_command_enters_asking_after_grace(self):
+    def test_unstarted_bash_without_permission_marker_stays_running(self):
         now = 2_000_000_000
         call = {"type": "tool_use", "id": "tool-1", "name": "Bash",
                 "input": {"command": "python3 build_release.py", "description": "Build release"}}
         self.write([user("Build it", now - 30), assistant([call], now - 20, "tool_use")], mtime=now)
         parsed = board.parse_session(self.path)
-        self.assertEqual("running", board.classify(parsed, now - 15, [])[0])
-        self.assertEqual("asking", board.classify(parsed, now, [])[0])
-        self.assertEqual("running", board.classify(parsed, now, ["python3 build_release.py"])[0])
+        self.assertEqual("running", board.classify(parsed, now, [])[0])
+
+    def test_permission_marker_with_pending_tool_enters_asking(self):
+        now = 2_000_000_000
+        call = {"type": "tool_use", "id": "tool-1", "name": "Bash",
+                "input": {"command": "python3 build_release.py", "description": "Build release"}}
+        self.write([user("Build it", now - 30), assistant([call], now - 20, "tool_use")], mtime=now)
+        parsed = board.parse_session(self.path)
+        state, detail = board.classify(parsed, now, [], {"at": now - 19})
+        self.assertEqual("asking", state)
+        self.assertIn("permission", detail)
+
+    def test_older_permission_marker_is_ignored(self):
+        now = 2_000_000_000
+        call = {"type": "tool_use", "id": "tool-1", "name": "Bash",
+                "input": {"command": "python3 build_release.py", "description": "Build release"}}
+        self.write([user("Build it", now - 30), assistant([call], now - 20, "tool_use")], mtime=now)
+        parsed = board.parse_session(self.path)
+        self.assertEqual("running", board.classify(parsed, now, [], {"at": now - 60})[0])
+
+    def test_newer_tool_result_clears_permission_marker(self):
+        now = 2_000_000_000
+        call = {"type": "tool_use", "id": "tool-1", "name": "Edit", "input": {"file_path": "/tmp/a"}}
+        call2 = {"type": "tool_use", "id": "tool-2", "name": "Read", "input": {"file_path": "/tmp/b"}}
+        result = [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}]
+        self.write([user("Edit it", now - 30), assistant([call], now - 20, "tool_use"),
+                    user(result, now - 10), assistant([call2], now - 9, "tool_use")], mtime=now)
+        parsed = board.parse_session(self.path)
+        self.assertNotEqual("asking", board.classify(parsed, now, [], {"at": now - 19})[0])
+
+    def test_live_bash_process_clears_permission_marker(self):
+        now = 2_000_000_000
+        call = {"type": "tool_use", "id": "tool-1", "name": "Bash",
+                "input": {"command": "python3 build_release.py", "description": "Build release"}}
+        self.write([user("Build it", now - 30), assistant([call], now - 20, "tool_use")], mtime=now)
+        parsed = board.parse_session(self.path)
+        prompt = {"at": now - 19}
+        self.assertEqual("running", board.classify(parsed, now, ["python3 build_release.py"], prompt)[0])
+
+    def test_permission_marker_without_pending_tool_is_ignored(self):
+        now = 2_000_000_000
+        self.write([user("Hi", now - 30), assistant([{"type": "text", "text": "Hello"}], now - 20, "end_turn")], mtime=now)
+        parsed = board.parse_session(self.path)
+        self.assertEqual("yourturn", board.classify(parsed, now, [], {"at": now - 5})[0])
+
+    def test_subagent_activity_clears_permission_marker(self):
+        now = 2_000_000_000
+        call = {"type": "tool_use", "id": "tool-1", "name": "Agent",
+                "input": {"description": "Search", "prompt": "Find it"}}
+        self.write([user("Find it", now - 60), assistant([call], now - 50, "tool_use")], mtime=now - 50)
+        sub = self.path.with_suffix("") / "subagents"
+        sub.mkdir(parents=True)
+        log = sub / "agent-1.jsonl"
+        log.write_text("{}\n")
+        os.utime(log, (now - 40, now - 40))
+        parsed = board.parse_session(self.path)
+        prompt = {"at": now - 39}
+        self.assertEqual("asking", board.classify(parsed, now, [], prompt)[0])
+        os.utime(log, (now - 5, now - 5))
+        parsed = board.parse_session(self.path)
+        self.assertNotEqual("asking", board.classify(parsed, now, [], prompt)[0])
 
     def test_tool_result_keeps_real_turn_active(self):
         now = 2_000_000_000

@@ -19,6 +19,8 @@ DATA_DIR = Path(os.environ.get("AGENT_BOARD_DATA_DIR", "~/.agent-board")).expand
 OUT = Path(os.environ.get("AGENT_BOARD_SUGGESTIONS_FILE", str(DATA_DIR / "agent_board_suggestions.json"))).expanduser()
 COMPLETED_OUT = Path(os.environ.get("AGENT_BOARD_COMPLETED_FILE", str(DATA_DIR / "agent_board_completed.json"))).expanduser()
 FLAGS_OUT = Path(os.environ.get("AGENT_BOARD_FLAGS_FILE", str(DATA_DIR / "agent_board_flags.json"))).expanduser()
+PROMPTS_OUT = Path(os.environ.get("AGENT_BOARD_PROMPTS_FILE", str(DATA_DIR / "agent_board_prompts.json"))).expanduser()
+PROMPT_KEEP_SECONDS = 7 * 86400
 MAX_TAIL = 1_000_000
 CONTINUE = re.compile(r"\b(next steps?|remaining|still need|pending|blocked by|waiting for|follow[ -]?up|to continue|not yet|needs your|need you to|once (?:you|we) (?:have|confirm|provide)|after (?:you|we) (?:have|confirm|provide))\b", re.I)
 DONE = re.compile(r"\b(completed|implemented|fixed|updated|created|saved|verified|delivered|finished|resolved|published|ready)\b", re.I)
@@ -219,7 +221,48 @@ def clear_suggestion(sid):
         fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+def save_prompt(hook):
+    """Record a Claude Code permission prompt from a Notification hook."""
+    sid = str(hook.get("session_id") or "")
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid):
+        return False
+    message = str(hook.get("message") or "")
+    kind = hook.get("notification_type")
+    if kind != "permission_prompt" and not (kind is None and "permission" in message.lower()):
+        return False
+    PROMPTS_OUT.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = PROMPTS_OUT.with_suffix(".lock")
+    with open(lock_path, "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            data = json.loads(PROMPTS_OUT.read_text())
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        now = time.time()
+        data = {k: v for k, v in data.items()
+                if isinstance(v, dict) and now - v.get("at", 0) < PROMPT_KEEP_SECONDS}
+        data[sid] = {"at": now, "message": message[:180]}
+        tmp = PROMPTS_OUT.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False))
+        tmp.replace(PROMPTS_OUT)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return True
+
+
+def capture_prompt():
+    try:
+        save_prompt(json.load(sys.stdin))
+    except Exception:
+        # A board marker must never interrupt Claude's notification lifecycle.
+        pass
+
+
 def main():
+    if "capture-prompt" in sys.argv[1:]:
+        capture_prompt()
+        return
     try:
         hook = json.load(sys.stdin)
         sid = str(hook.get("session_id") or "")

@@ -12,6 +12,22 @@ classifier = importlib.import_module("agent_board_classify")
 
 
 class ChatCloseoutTests(unittest.TestCase):
+    def test_capture_prompt_records_only_permission_prompts(self):
+        sid = "11111111-2222-3333-4444-555555555555"
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "prompts.json"
+            with mock.patch.object(classifier, "PROMPTS_OUT", out):
+                self.assertFalse(classifier.save_prompt({"session_id": sid, "notification_type": "idle_prompt",
+                                                         "message": "Claude is waiting for your input"}))
+                self.assertFalse(classifier.save_prompt({"session_id": "bad", "notification_type": "permission_prompt"}))
+                self.assertFalse(out.exists())
+                self.assertTrue(classifier.save_prompt({"session_id": sid, "notification_type": "permission_prompt",
+                                                        "message": "Claude needs your permission to use Bash"}))
+                saved = json.loads(out.read_text())
+                self.assertEqual(["message", "at"], sorted(saved[sid], reverse=True))
+                with mock.patch.object(sys, "stdin", io.StringIO("not json")):
+                    classifier.capture_prompt()
+
     def test_accepts_short_explicit_closeouts(self):
         accepted = ["done", "ok done", "Okay, done!", "all done",
                     "this session is done", "mark this session done",
