@@ -667,7 +667,11 @@ def open_session(sid, hours):
             url = (f"vscode://openai.chatgpt/local/{sid}" if kind == "codex" else
                    f"vscode://anthropic.claude-code/open?session={sid}")
             if sys.platform == "darwin" and not user_data:
-                # Launch Services hands the link to the running VS Code app directly.
+                # The extension finds a session only from a window open on its folder, so focus that
+                # window first. Launch Services avoids the CLI's extra helper window.
+                if cwd and os.path.isdir(cwd):
+                    subprocess.run(["open", "-a", "Visual Studio Code", cwd], check=True, timeout=15)
+                    time.sleep(1.5)
                 subprocess.run(["open", url], check=True, timeout=15)
             else:
                 cli = (CONFIG.get("vscode_cli") or shutil.which("code") or
@@ -677,11 +681,12 @@ def open_session(sid, hours):
                 base = [cli]
                 if user_data:
                     base += ["--user-data-dir", str(Path(user_data).expanduser())]
-                # Keep the separate profile and session link in one CLI request.
-                args = base + ["--reuse-window"]
+                # --open-url treats every argument as a link, so focus the session's folder first;
+                # the extension only finds a session from a window open on that folder.
                 if cwd and os.path.isdir(cwd):
-                    args.append(cwd)
-                subprocess.run(args + ["--open-url", url], check=True, timeout=15)
+                    subprocess.run(base + [cwd], check=True, timeout=15)
+                    time.sleep(1.5)
+                subprocess.run(base + ["--open-url", url], check=True, timeout=15)
         else:
             return False
     except (OSError, subprocess.SubprocessError):

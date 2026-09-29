@@ -167,7 +167,8 @@ def make_workstreams(rows, data, flags=None):
             bucket = "suggested"
         elif all(r["bucket"] == "temporary" for r in leaves):
             bucket = "temporary"
-        elif marked and lead["bucket"] not in ("asking", "check", "active"):
+        # An inherited star waits until a fresh reply has been seen.
+        elif marked and lead["bucket"] not in ("asking", "check", "active", "yourturn"):
             bucket = "pending"
         else:
             bucket = lead["bucket"]

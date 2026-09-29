@@ -89,5 +89,19 @@ class ContinueLaterCloseoutTests(unittest.TestCase):
         self.assertEqual("yourturn", board.board_bucket(row))
 
 
+    def test_inherited_star_does_not_hide_fresh_reply(self):
+        root = "11111111-1111-4111-8111-111111111111"
+        leaf = "22222222-2222-4222-8222-222222222222"
+        flag = {"note": "", "at": 50}
+        rows = [{"id": root, "title": "Old chat", "root": "claude", "activity": 60, "bucket": "pending",
+                 "flag": flag, "detail": "Idle."},
+                {"id": leaf, "title": "Old chat", "root": "claude", "activity": 100, "bucket": "yourturn",
+                 "flag": None, "detail": "Finished. Waiting for you."}]
+        data = {"links": {leaf: {"parent": root, "source": "resume"}}, "rejected": {}, "completed": {}}
+        self.assertEqual("yourturn", workstreams.make_workstreams([dict(r) for r in rows], data, {root: flag})[0]["bucket"])
+        rows[1]["bucket"] = "idle"
+        self.assertEqual("pending", workstreams.make_workstreams([dict(r) for r in rows], data, {root: flag})[0]["bucket"])
+
+
 if __name__ == "__main__":
     unittest.main()

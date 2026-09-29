@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -151,6 +152,21 @@ class ClaudeStateTests(unittest.TestCase):
         parsed = board.parse_session(self.path)
         self.assertEqual("done", parsed["last_kind"])
         self.assertEqual([], parsed["bg"])
+
+    def test_vscode_open_focuses_session_folder_before_link(self):
+        sid = "33333333-3333-4333-8333-333333333333"
+        with tempfile.TemporaryDirectory() as cwd:
+            row = {"id": sid, "root": "~/.claude/projects", "cwd": cwd}
+            calls = []
+            with unittest.mock.patch.object(board, "_recent_status", (0, 0, [row])), \
+                    unittest.mock.patch.object(board, "CONFIG", {"open_targets": {"claude": "vscode"}}), \
+                    unittest.mock.patch.object(board, "claude_app_session_id", return_value=None), \
+                    unittest.mock.patch.object(board.sys, "platform", "darwin"), \
+                    unittest.mock.patch.object(board.time, "sleep"), \
+                    unittest.mock.patch.object(board.subprocess, "run", side_effect=lambda a, **k: calls.append(a)):
+                self.assertTrue(board.open_session(sid, 1))
+        self.assertEqual([["open", "-a", "Visual Studio Code", cwd],
+                          ["open", f"vscode://anthropic.claude-code/open?session={sid}"]], calls)
 
 
 if __name__ == "__main__":

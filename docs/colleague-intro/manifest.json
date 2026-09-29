@@ -2,7 +2,7 @@
   "title": "See what your agents are doing at a glance.",
   "mode": "editorial",
   "source": "Agent Board source, README and macOS build script",
-  "as_of": "2026-09-27",
+  "as_of": "2026-09-29",
   "claims": [
     {
       "text": "Local menu bar and workstream board for Claude Code and Codex",
@@ -26,7 +26,7 @@
     },
     {
       "text": "Ready-built app is recommended; it updates in-app, while source builds update with git pull and a rebuild",
-      "evidence": "docs/RELEASE-v0.4.11.md and docs/colleague-intro/QUICKSTART.md update section"
+      "evidence": "docs/RELEASE-v0.4.12.md and docs/colleague-intro/QUICKSTART.md update section"
     }
   ]
 }
