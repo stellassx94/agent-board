@@ -46,15 +46,15 @@ for s in d.get("workstreams", d["sessions"]):
 c, a, y = len(groups["check"]), len(groups["active"]), len(groups["yourturn"])
 q = len(groups["asking"])
 p = len(groups["pending"])
-title = " ".join(f"{icon}{count}" for icon, count in (("🟡", q), ("🟢", a), ("🔵", y), ("🔴", c), ("🟣", p)) if count) or "⚪"
+title = " ".join(f"{icon}{count}" for icon, count in (("🟡", q), ("🔵", a), ("🟢", y), ("🔴", c), ("🟣", p)) if count) or "⚪"
 print(title + " | font=Menlo size=12")
 print("---")
 print("Open Agent Board | bash=/usr/bin/open param1=-b param2=com.stella.agentboard.trial terminal=false")
 print(f"Open in browser | href={URL}")
 print("---")
 
-SECTIONS = [("asking", "🟡 Asking you"), ("check", "🔴 Check me"), ("active", "🟢 Working"),
-            ("yourturn", "🔵 Your turn"), ("pending", "🟣 Continue later"),
+SECTIONS = [("asking", "🟡 Asking you"), ("check", "🔴 Check me"), ("active", "🔵 Working"),
+            ("yourturn", "🟢 Your turn"), ("pending", "🟣 Continue later"),
             ("suggested", "Suggestions to review")]
 for k, name in SECTIONS:
     rows = groups[k]

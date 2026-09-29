@@ -84,7 +84,7 @@ class ResumeNewChatTests(unittest.TestCase):
             {"id": "00000000-0000-4000-8000-000000000004", "title": "Resume BR PRD conversion"},
         ]
         board.inherit_resume_titles(rows, {linked: {"parent": SID}})
-        self.assertEqual(["Agent board release", "↩ Agent board release", "↩ Agent board release",
+        self.assertEqual(["Agent board release", "Agent board release", "Agent board release",
                           "Resume BR PRD conversion"], [r["title"] for r in rows])
 
 

@@ -584,8 +584,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let indicators: [(String, String, String, NSColor)] = [
             ("asking", "?", "Asking you", .systemOrange),
             ("check", "!", "Check me", .systemRed),
-            ("yourturn", "↩", "Your turn", .systemBlue),
-            ("active", "✦", "Working", .systemGreen),
+            ("yourturn", "↩", "Your turn", .systemGreen),
+            ("active", "✦", "Working", .systemBlue),
             ("pending", "📌", "Continue later", .systemPurple)
         ]
         let attentionBucket = ["asking", "check", "yourturn"].first { (statusCounts[$0] ?? 0) > 0 }

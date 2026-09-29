@@ -75,6 +75,16 @@ class ClaudeStateTests(unittest.TestCase):
         self.assertEqual("tool", parsed["last_kind"])
         self.assertEqual("running", board.classify(parsed, now, [])[0])
 
+    def test_unstarted_bash_command_enters_asking_after_grace(self):
+        now = 2_000_000_000
+        call = {"type": "tool_use", "id": "tool-1", "name": "Bash",
+                "input": {"command": "python3 build_release.py", "description": "Build release"}}
+        self.write([user("Build it", now - 30), assistant([call], now - 20, "tool_use")], mtime=now)
+        parsed = board.parse_session(self.path)
+        self.assertEqual("running", board.classify(parsed, now - 15, [])[0])
+        self.assertEqual("asking", board.classify(parsed, now, [])[0])
+        self.assertEqual("running", board.classify(parsed, now, ["python3 build_release.py"])[0])
+
     def test_tool_result_keeps_real_turn_active(self):
         now = 2_000_000_000
         call = {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"path": "/tmp/a"}}

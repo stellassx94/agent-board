@@ -2,7 +2,7 @@
 	"name": "agent-board-sidebar",
 	"displayName": "Agent Board Sidebar",
 	"description": "Compact sidebar list of your Claude Code and Codex sessions, fed by the local Agent Board.",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"icon": "media/logo.png",
 	"publisher": "stella-simsx",
 	"private": true,

@@ -8,8 +8,8 @@ const { spawn } = require("child_process");
 const GROUPS = [
   { key: "asking", label: "Asking you", color: "charts.yellow", open: true },
   { key: "check", label: "Check me", color: "charts.red", open: true },
-  { key: "active", label: "Working", color: "charts.green", open: true },
-  { key: "yourturn", label: "Your turn", color: "charts.blue", open: true },
+  { key: "active", label: "Working", color: "charts.blue", open: true },
+  { key: "yourturn", label: "Your turn", color: "charts.green", open: true },
   { key: "pending", label: "Continue later", color: "charts.purple", open: true },
   { key: "suggested", label: "Suggestions", color: "terminal.ansiCyan", open: false },
   { key: "idle", label: "Idle", color: "disabledForeground", open: false },
@@ -118,7 +118,7 @@ class Provider {
         item.id = "session:" + s.id;
         item.sessionId = s.id;
         item.contextValue = `session;done=${s.completed ? 1 : 0};cont=${s.choice === "continue" ? 1 : 0}`;
-        item.description = age(now - (s.activity || s.last_ts || now)) + (s.root === "codex" ? " · Codex" : "");
+        item.description = age(now - (s.activity || s.last_ts || now)) + (s.root === "codex" ? " · Codex" : "") + (s.continued ? " · continued" : "");
         item.iconPath = new vscode.ThemeIcon(s.flag ? "star-full" : "circle-filled", new vscode.ThemeColor(g.color));
         const tip = new vscode.MarkdownString();
         tip.appendMarkdown(`**${(s.title || "").replace(/[*_`]/g, "")}**\n\n`);

@@ -1,0 +1,10 @@
+# Agent Board v0.4.15
+
+This release builds on v0.4.14. It makes status colours easier to read and catches Claude chats that wait for command approval.
+
+- **Continued chats show a `· continued` tag instead of a `↩` prefix.** A resumed chat still shows the title of the chat it came from, for example "Agent board release". The board and the VS Code sidebar now add `· continued` after the account and age, next to the existing `· Codex` tag. The `↩` symbol now has one meaning only: **Your turn** in the menu bar.
+- **Status colours are swapped.** **Working** is now blue and **Your turn** is now green, on the board, the VS Code sidebar, the menu bar app, and the optional SwiftBar plugin. **Asking you** stays yellow, **Check me** stays red, and **Continue later** stays purple.
+- **Claude approval waits show as Asking you.** Before, a Claude chat that waited for you to approve a command stayed in **Working** with the note "may be waiting for your approval". Now, when a pending Bash command has not started after 10 seconds, the chat moves to **Asking you** with "May be awaiting approval". This is a best-effort signal, because Claude does not log the approval prompt itself. Codex approval detection is unchanged.
+- Regression tests cover the new approval rule and the untagged titles. All other board behavior is unchanged.
+
+The Apple Silicon macOS ZIP is `Agent-Board-v0.4.15-macos-arm64.zip` (SHA-256 `240ad984e9e7d75f43d8904ef63ddcaf5367e376dbbcb350dabc19174fbea224`). The VS Code extension is updated to `agent-board-sidebar-0.3.1.vsix` (SHA-256 `8ca951649de6e51661fdd207f787d2c3771e5853e60afd1b0b219726bf7dd8d7`); its source is in `vscode-extension/`. The app targets macOS 13 or later, is ad-hoc signed and not notarized, and may require **Open Anyway**. The digests and packages come from the same release account, not independent publisher authentication; see [Security notes](SECURITY_NOTES.md). Publishing does not update an already-running local app; use **Check for updates…** in v0.4.9 or later.
