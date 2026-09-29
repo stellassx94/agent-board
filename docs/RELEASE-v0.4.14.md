@@ -1,0 +1,8 @@
+# Agent Board v0.4.14
+
+This release builds on v0.4.13 and makes resumed chats readable on the board.
+
+- **Resumed chats show the title of the chat they came from.** A chat started with **Resume in new chat ↻** or the resume skill was titled after its first prompt, for example "Resume session 60f6d81b" or "Use the resume skill to pick up session …". The board and the VS Code sidebar now show the source chat's title with a `↩` prefix instead, for example "↩ Agent board release". The source comes from the session link recorded by the resume skill, or from the session ID in the title when no link exists yet. A chain of resumed chats uses the first readable title. Titles that start with "Resume" but carry real words, such as "Resume BR PRD conversion", are unchanged, as are custom titles.
+- A regression test covers linked, unlinked, chained, and unchanged titles. All other board behavior is unchanged.
+
+The Apple Silicon macOS ZIP is `Agent-Board-v0.4.14-macos-arm64.zip` (SHA-256 `c12cafb3ee5d59493bb52173aca81cf0689973d3154fce8080bde7545d091d72`). The VS Code extension is unchanged at `agent-board-sidebar-0.3.0.vsix` (SHA-256 `ac76f11712a6e9c9e545e9672fdaec41e7cb0008264c9b7b7c056c1a9641b13e`), attached again for convenience; its source is in `vscode-extension/`. The app targets macOS 13 or later, is ad-hoc signed and not notarized, and may require **Open Anyway**. The digests and packages come from the same release account, not independent publisher authentication; see [Security notes](SECURITY_NOTES.md). Publishing does not update an already-running local app; use **Check for updates…** in v0.4.9 or later.

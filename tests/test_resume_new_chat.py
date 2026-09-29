@@ -74,6 +74,19 @@ class ResumeNewChatTests(unittest.TestCase):
                 mock.patch.object(board, "status", return_value={"sessions": []}):
             self.assertIsNone(board.resume_in_new_chat(SID, 24))
 
+    def test_resumed_chat_inherits_source_title(self):
+        parent = "60f6d81b-0000-4000-8000-000000000001"
+        linked = "00000000-0000-4000-8000-000000000003"
+        rows = [
+            {"id": parent, "title": "Agent board release"},
+            {"id": SID, "title": "Resume session 60f6d81b"},
+            {"id": linked, "title": "Use the resume skill to pick up session 00000000-0000"},
+            {"id": "00000000-0000-4000-8000-000000000004", "title": "Resume BR PRD conversion"},
+        ]
+        board.inherit_resume_titles(rows, {linked: {"parent": SID}})
+        self.assertEqual(["Agent board release", "↩ Agent board release", "↩ Agent board release",
+                          "Resume BR PRD conversion"], [r["title"] for r in rows])
+
 
 if __name__ == "__main__":
     unittest.main()
