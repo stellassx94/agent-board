@@ -26,8 +26,10 @@ function appScript() {
 }
 
 // The installed app bundle, unless the user points the sidebar at another script.
+// A scriptPath inside the installed app still means the app.
 function appBundle() {
-  if (vscode.workspace.getConfiguration("agentBoard").get("scriptPath", "")) return null;
+  const custom = vscode.workspace.getConfiguration("agentBoard").get("scriptPath", "");
+  if (custom && path.resolve(custom.replace(/^~(?=\/)/, os.homedir())) !== appScript()) return null;
   const app = path.resolve(appScript(), "../../../..");
   return fs.existsSync(app) ? app : null;
 }

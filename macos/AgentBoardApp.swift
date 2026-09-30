@@ -62,6 +62,31 @@ private func runTool(_ executable: String, _ arguments: [String]) throws {
     guard process.terminationStatus == 0 else { throw UpdateError.invalidBundle }
 }
 
+private func toolOutput(_ executable: String, _ arguments: [String]) -> String {
+    let process = Process()
+    let pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return "" }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return String(data: data, encoding: .utf8) ?? ""
+}
+
+private func boardListeners() -> [Int32] {
+    toolOutput("/usr/sbin/lsof", ["-nP", "-t", "-iTCP:\(boardPort)", "-sTCP:LISTEN"])
+        .split(whereSeparator: \.isNewline).compactMap { Int32($0) }
+}
+
+/// Older VS Code sidebars run this app's bundled Python script, which the app
+/// updater cannot stop and which writes __pycache__ into the signed bundle.
+private func removeBundledBytecode() {
+    guard let backend = Bundle.main.resourceURL?.appendingPathComponent("Backend/__pycache__") else { return }
+    try? FileManager.default.removeItem(at: backend)
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private var window: NSWindow?
     private var webView: WKWebView?
@@ -81,10 +106,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var lastStatusSuccess: Date?
     private var lastWorkstreams: [[String: Any]] = []
     private var isUpdating = false
+    private var lastServiceReplace: Date?
     private let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        removeBundledBytecode()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         statusItem.button?.title = "⚪"
@@ -414,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                     self.lastStatusSuccess = Date()
                     self.lastWorkstreams = workstreams
                     self.rebuildMenu()
+                    self.replaceBundledPythonService()
                     if !self.boardLoaded {
                         self.showingOffline = false
                         self.webView?.load(URLRequest(url: boardURL))
@@ -437,6 +465,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 }
             }
         }.resume()
+    }
+
+    /// Stop a service that runs this app's bundled Python script outside the app, then start the app's own.
+    private func replaceBundledPythonService() {
+        guard backendTask?.isRunning != true,
+              lastServiceReplace.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return }
+        lastServiceReplace = Date()
+        let script = Bundle.main.bundlePath + "/Contents/Resources/Backend/"
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let stale = boardListeners().filter {
+                toolOutput("/bin/ps", ["-ww", "-o", "command=", "-p", String($0)]).contains(script)
+            }
+            guard !stale.isEmpty else { return }
+            stale.forEach { kill($0, SIGTERM) }
+            for _ in 0..<30 where !boardListeners().isEmpty {
+                usleep(100_000)
+            }
+            removeBundledBytecode()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.backendAttempts = 0
+                self.startBackend()
+                self.refreshStatus()
+            }
+        }
     }
 
     private func startBackend() {

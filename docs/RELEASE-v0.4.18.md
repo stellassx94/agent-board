@@ -1,0 +1,10 @@
+# Agent Board v0.4.18
+
+This release builds on v0.4.17. It stops an old service from staying on after an update.
+
+- **The app replaces a Python service that runs from inside it.** An older VS Code sidebar, or a VS Code window that has not reloaded since the sidebar update, runs the app's bundled `agent_board.py` with Python. The app updater cannot stop that copy, so **Check for updates…** showed an older running service than the installed app. Once a minute, when the app has not started the board service itself, it now checks the board port. If the service there runs a script from inside this app, the app stops it and starts its own service. The app never stops a service that runs from anywhere else.
+- **The app removes Python cache files from its bundle.** The older sidebar wrote a `__pycache__` folder into the app, which broke its signature check. The app now deletes that folder when it starts and after it replaces a service.
+- **The VS Code sidebar treats the app's own script as the app.** When `agentBoard.scriptPath` points at the installed app's `agent_board.py`, the sidebar now opens the app and stops an older service, as it does when the setting is empty. Before, that setting made the sidebar run the script with Python. A `scriptPath` anywhere else still runs that script.
+- All other board behavior is unchanged.
+
+The Apple Silicon macOS ZIP is `Agent-Board-v0.4.18-macos-arm64.zip` (SHA-256 `b66c0b8954ade184e06bd6a32df75d4d048d6e25cd1ef3f4c258e49c493f0faa`). The VS Code extension is updated to `agent-board-sidebar-0.3.3.vsix` (SHA-256 `779aa1d6cb7d4debdb1453ddeb81727d7576802b530d59bc18092aa2359b37e5`); its source is in `vscode-extension/`. VS Code windows that are already open keep the old sidebar until you reload them. The app targets macOS 13 or later, is ad-hoc signed and not notarized, and may require **Open Anyway**. The digests and packages come from the same release account, not independent publisher authentication; see [Security notes](SECURITY_NOTES.md). Publishing does not update an already-running local app; use **Check for updates…** in v0.4.9 or later.
