@@ -224,7 +224,7 @@ class Provider {
             .map(({ name, list }) => {
               const item = new vscode.TreeItem(
                 name || "Ungrouped",
-                this.filter || name ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+                this.filter || (name && list.some((s) => s.bucket !== "idle")) ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
               );
               item.id = "topic:" + (name === null ? "" : "n:" + name) + (this.filter ? ":f" : "");
               item.description = String(list.length);
@@ -239,10 +239,25 @@ class Provider {
       return this.groups(GROUPS.map((g) => g.key));
     }
     const now = this.data.now;
+    // Idle rows fold behind one node, so a topic opens as a short list.
     if (el.contextValue === "topic" || el.contextValue === "ungrouped") {
+      const rows = this.topicRows().filter((s) => s.topic === el.topic);
+      const idle = rows.filter((s) => s.bucket === "idle");
+      const items = rows.filter((s) => s.bucket !== "idle").map((s) => this.row(s, now, true));
+      if (idle.length) {
+        const item = new vscode.TreeItem("Idle", this.filter ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+        item.id = "idle:" + (el.topic === null ? "" : "n:" + el.topic) + (this.filter ? ":f" : "");
+        item.description = String(idle.length);
+        item.contextValue = "topicIdle";
+        item.topic = el.topic;
+        items.push(item);
+      }
+      return items;
+    }
+    if (el.contextValue === "topicIdle") {
       return this.topicRows()
-        .filter((s) => s.topic === el.topic)
-        .map((s) => this.row(s, now, true));
+        .filter((s) => s.topic === el.topic && s.bucket === "idle")
+        .map((s) => this.row(s, now, false));
     }
     if (el.contextValue !== "group") return [];
     return this.sessions()
