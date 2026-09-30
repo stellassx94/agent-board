@@ -640,7 +640,8 @@ def claude_display_title(path, parsed_title, app_titles):
     return short(app_titles.get(path.stem) or parsed_title, 80)
 
 
-RESUME_TITLE_RE = re.compile(r"(?i)^\s*(?:/?resume|use the resume skill)\b(?:.*?\b([0-9a-f]{8})[0-9a-f-]*)?")
+RESUME_TITLE_RE = re.compile(r"(?i)^\s*(?:/?resume|use the resume skill|continue: (?P<name>.+?) — use the resume skill)"
+                             r"\b(?:.*?\b(?P<id>[0-9a-f]{8})[0-9a-f-]*)?")
 
 
 def inherit_resume_titles(rows, links):
@@ -649,14 +650,15 @@ def inherit_resume_titles(rows, links):
 
     def generic(title):
         m = RESUME_TITLE_RE.match(title or "")
-        return m if m and (m.group(1) or not title.strip(" /").lower().replace("resume", "")) else None
+        return m if m and (m.group("id") or m.group("name")
+                           or not title.strip(" /").lower().replace("resume", "")) else None
 
     def source_of(r):
         parent = (links.get(r["id"]) or {}).get("parent")
         if parent in by_id:
             return by_id[parent]
         m = generic(original[r["id"]])
-        prefix = m.group(1) if m else None
+        prefix = m.group("id") if m else None
         return next((x for x in rows if prefix and x is not r and x["id"].startswith(prefix)), None)
 
     original = {r["id"]: r["title"] for r in rows}
@@ -669,6 +671,9 @@ def inherit_resume_titles(rows, links):
             src = source_of(src)
         if src and not generic(original[src["id"]]):
             r["title"] = short(original[src["id"]], 80)
+            r["continued"] = True
+        elif generic(original[r["id"]]).group("name"):
+            r["title"] = generic(original[r["id"]]).group("name")
             r["continued"] = True
 
 
@@ -768,8 +773,11 @@ def resume_surface(row):
 def resume_prompt(row):
     kind = "codex" if row["root"] == "codex" else "claude"
     snap = Path.home() / ".agent-handoffs" / f"{kind}-{row['id']}.md"
-    return (f"Use the resume skill to pick up session {row['id']}. "
-            f"Snapshot: {snap}")
+    # Claude names a new chat from its first message, so lead with the source title.
+    title = short(row.get("title"), 40)
+    lead = (f"Continue: {title} — use the resume skill"
+            if title and not RESUME_TITLE_RE.match(title) else "Use the resume skill")
+    return f"{lead} to pick up session {row['id']}. Snapshot: {snap}"
 
 
 def resume_in_new_chat(sid, hours):

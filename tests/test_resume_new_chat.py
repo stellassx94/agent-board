@@ -37,6 +37,12 @@ class ResumeNewChatTests(unittest.TestCase):
         self.assertIn("resume skill", prompt)
         self.assertIn(f".agent-handoffs/codex-{SID}.md", prompt)
 
+    def test_prompt_leads_with_source_title(self):
+        prompt = board.resume_prompt({"id": SID, "root": "projects", "title": "Agent board release"})
+        self.assertTrue(prompt.startswith(f"Continue: Agent board release — use the resume skill to pick up session {SID}."))
+        generic = board.resume_prompt({"id": SID, "root": "projects", "title": "Resume session 60f6d81b"})
+        self.assertTrue(generic.startswith("Use the resume skill"))
+
     def test_claude_app_opens_new_code_chat_in_folder(self):
         mode, calls, cwd = self.run_resume(entrypoint="sdk-cli")
         self.assertEqual("sent", mode)
@@ -86,6 +92,21 @@ class ResumeNewChatTests(unittest.TestCase):
         board.inherit_resume_titles(rows, {linked: {"parent": SID}})
         self.assertEqual(["Agent board release", "Agent board release", "Agent board release",
                           "Resume BR PRD conversion"], [r["title"] for r in rows])
+
+    def test_continue_prompt_title_inherits_or_keeps_its_name(self):
+        parent = "60f6d81b-0000-4000-8000-000000000001"
+        orphan = "00000000-0000-4000-8000-000000000005"
+        rows = [
+            {"id": parent, "title": "Agent board release"},
+            {"id": SID, "title": board.short(board.resume_prompt(
+                {"id": parent, "root": "projects", "title": "Old name"}), 80)},
+            {"id": orphan, "title": board.short(board.resume_prompt(
+                {"id": "abcdef12-0000", "root": "projects", "title": "Gone chat"}), 80)},
+        ]
+        board.inherit_resume_titles(rows, {})
+        self.assertEqual(["Agent board release", "Agent board release", "Gone chat"],
+                         [r["title"] for r in rows])
+        self.assertTrue(rows[1].get("continued") and rows[2].get("continued"))
 
 
 if __name__ == "__main__":
