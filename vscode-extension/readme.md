@@ -6,9 +6,12 @@ Compact VS Code sidebar list of Claude Code and Codex sessions, read from the lo
 - Click a row to open its latest chat.
 - The ↻ icon, or right-click **Resume in new chat**, starts a fresh chat in the session's own app with a resume-skill prompt (Agent Board v0.4.13 or later).
 - Inline and right-click actions mark a workstream done or save it for Continue later.
+- The list-tree icon switches between grouping by status and grouping by topic. Topics come from the board service (`agent_board_topics.json` in the Agent Board data folder), so the app and the sidebar agree. The topic view keeps Asking you, Check me, Working and Your turn at the top, files the other live rows under their topic, and leaves Temporary and Completed at the bottom.
+- Rows show the ticket keys they mention, such as `ABC-1234`, and search matches them. `agentBoard.ticketPrefixes` limits which prefixes count.
+- The collapsible **Overview** section shows count tiles for Asking you, Check me, Working, Your turn and Continue later. Click a tile to pick a session in that status.
 
 If the board is not running, the extension starts the service inside the installed Agent Board app (`~/Applications` or `/Applications`). Set `agentBoard.scriptPath` to use a different `agent_board.py`.
 
 ## Build and install
 
-Run `sh vscode-extension/package.sh` from the repository. It writes `build/agent-board-sidebar-<version>.vsix` without npm. Install it with `code --install-extension build/agent-board-sidebar-<version>.vsix`, then run **Developer: Reload Window**.
+The sidebar carries the same version as the Agent Board app, and the release check refuses a mismatch. Run `sh vscode-extension/package.sh` from the repository. It writes `build/agent-board-sidebar-<version>.vsix` without npm. Install it with `code --install-extension build/agent-board-sidebar-<version>.vsix`, then run **Developer: Reload Window**.

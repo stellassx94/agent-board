@@ -8,6 +8,7 @@ agent_board_suggestions.json
 agent_board_suggestions.lock
 agent_board_lineage.json
 agent_board_lineage.lock
+agent_board_topics.json
 *.jsonl
 *.log
 .env

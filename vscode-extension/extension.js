@@ -3,6 +3,7 @@ const http = require("http");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { spawn, execFile } = require("child_process");
 
 const GROUPS = [
@@ -73,6 +74,19 @@ function age(sec) {
   return Math.round(m / 1440) + "d";
 }
 
+// The topic view keeps these statuses as groups: the first set above the
+// topics, the second below. Every other row is filed under its topic.
+const TOPIC_TOP = ["asking", "check", "active", "yourturn"];
+const TOPIC_BOTTOM = ["temporary", "completed"];
+
+// Ticket keys such as ABC-1234 that a row mentions, so they show and search.
+// agentBoard.ticketPrefixes narrows them; an empty list accepts any prefix.
+function tickets(s, prefixes) {
+  const text = [s.title, s.detail, s.last_user, s.last_text].filter(Boolean).join(" ");
+  const found = text.match(/\b[A-Z][A-Z0-9]{1,9}-\d{2,}\b/g) || [];
+  return [...new Set(found)].filter((k) => !prefixes.length || prefixes.includes(k.slice(0, k.lastIndexOf("-"))));
+}
+
 class Provider {
   constructor() {
     this.data = null;
@@ -91,9 +105,9 @@ class Provider {
   // One row per workstream, like the board's default view, so resumed chats
   // merge into their original row and the counts match the app.
   // Older services without workstreams fall back to one row per session.
-  sessions() {
+  sessions(unfiltered) {
     if (!this.data) return [];
-    const f = this.filter.toLowerCase();
+    const f = unfiltered ? "" : this.filter.toLowerCase();
     const byId = new Map(this.data.sessions.map((s) => [s.id, s]));
     const rows = this.data.workstreams
       ? this.data.workstreams.map((w) => {
@@ -104,6 +118,7 @@ class Provider {
             workstreamId: w.id,
             leadId: w.lead_id,
             title: w.title,
+            topic: w.topic,
             bucket: w.bucket,
             activity: w.activity,
             flag: w.flag,
@@ -114,7 +129,74 @@ class Provider {
           };
         })
       : this.data.sessions.map((s) => ({ ...s, leadId: s.id, count: 1, codexOnly: s.root === "codex" }));
-    return rows.filter((s) => !f || (s.title || "").toLowerCase().includes(f));
+    const prefixes = vscode.workspace.getConfiguration("agentBoard").get("ticketPrefixes", []).map((p) => String(p).toUpperCase());
+    return rows
+      .map((s) => ({ ...s, topic: s.topic || null, tickets: tickets(s, prefixes) }))
+      .filter((s) => !f || ((s.title || "") + " " + s.tickets.join(" ")).toLowerCase().includes(f));
+  }
+
+  // Topics come from the board service, so the app and this list agree.
+  // Without any, the list stays grouped by status.
+  topics() {
+    return (this.data && this.data.topics) || [];
+  }
+
+  byTopic() {
+    return vscode.workspace.getConfiguration("agentBoard").get("groupBy", "status") === "topic" && this.topics().length > 0;
+  }
+
+  // Rows filed under topics, most urgent status first.
+  topicRows() {
+    const order = GROUPS.map((g) => g.key).filter((k) => !TOPIC_TOP.includes(k) && !TOPIC_BOTTOM.includes(k));
+    return this.sessions()
+      .filter((s) => order.includes(s.bucket))
+      .sort((a, b) => order.indexOf(a.bucket) - order.indexOf(b.bucket) || (b.activity || 0) - (a.activity || 0));
+  }
+
+  // Status group headers for the given buckets, empty ones left out.
+  groups(keys) {
+    const all = this.sessions();
+    return GROUPS.filter((g) => keys.includes(g.key))
+      .map((g) => ({ g, list: all.filter((s) => s.bucket === g.key) }))
+      .filter((x) => x.list.length)
+      .map(({ g, list }) => {
+        const item = new vscode.TreeItem(
+          g.label,
+          this.filter || g.open ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+        );
+        item.id = "group:" + g.key + (this.filter ? ":f" : "");
+        item.description = String(list.length);
+        item.contextValue = "group";
+        item.groupKey = g.key;
+        return item;
+      });
+  }
+
+  row(s, now, showStatus) {
+    const g = GROUPS.find((x) => x.key === s.bucket);
+    const item = new vscode.TreeItem(s.title || s.id);
+    item.id = "session:" + (s.workstreamId || s.id);
+    item.sessionId = s.id;
+    item.leadId = s.leadId;
+    item.workstreamId = s.workstreamId;
+    item.leadDone = !!s.completed;
+    item.contextValue = `session;done=${s.completed ? 1 : 0};cont=${s.choice === "continue" ? 1 : 0}`;
+    item.description =
+      (showStatus ? g.label + " · " : "") +
+      age(now - (s.activity || s.last_ts || now)) +
+      (s.codexOnly ? " · Codex" : "") +
+      (s.count > 1 ? ` · ${s.count} chats` : s.continued ? " · continued" : "") +
+      (s.tickets.length ? " · " + s.tickets[0] + (s.tickets.length > 1 ? ` +${s.tickets.length - 1}` : "") : "");
+    item.iconPath = new vscode.ThemeIcon(s.flag ? "star-full" : "circle-filled", new vscode.ThemeColor(g.color));
+    const tip = new vscode.MarkdownString();
+    tip.appendMarkdown(`**${(s.title || "").replace(/[*_`]/g, "")}**\n\n`);
+    if (s.detail) tip.appendText(s.detail + "\n\n");
+    if (s.last_text) tip.appendText(s.last_text + "\n\n");
+    if (s.tickets.length) tip.appendText("Tickets: " + s.tickets.join(", ") + "\n\n");
+    tip.appendText(`${s.project || ""} · ${s.root}`);
+    item.tooltip = tip;
+    item.command = { command: "agentBoard.open", title: "Open session", arguments: [s.id] };
+    return item;
   }
 
   getTreeItem(el) {
@@ -132,47 +214,132 @@ class Provider {
         return [item];
       }
       if (!this.data) return [new vscode.TreeItem("Loading…")];
-      const all = this.sessions();
-      return GROUPS.map((g) => ({ g, list: all.filter((s) => s.bucket === g.key) }))
-        .filter((x) => x.list.length)
-        .map(({ g, list }) => {
-          const item = new vscode.TreeItem(
-            g.label,
-            this.filter || g.open ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
-          );
-          item.id = "group:" + g.key + (this.filter ? ":f" : "");
-          item.description = String(list.length);
-          item.contextValue = "group";
-          item.groupKey = g.key;
-          return item;
-        });
+      if (this.byTopic()) {
+        const rows = this.topicRows();
+        return [
+          ...this.groups(TOPIC_TOP),
+          ...[...this.topics(), null]
+            .map((name) => ({ name, list: rows.filter((s) => s.topic === name) }))
+            .filter((x) => x.list.length)
+            .map(({ name, list }) => {
+              const item = new vscode.TreeItem(
+                name || "Ungrouped",
+                this.filter || name ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+              );
+              item.id = "topic:" + (name === null ? "" : "n:" + name) + (this.filter ? ":f" : "");
+              item.description = String(list.length);
+              item.contextValue = name ? "topic" : "ungrouped";
+              item.topic = name;
+              item.iconPath = new vscode.ThemeIcon(name ? "tag" : "inbox");
+              return item;
+            }),
+          ...this.groups(TOPIC_BOTTOM),
+        ];
+      }
+      return this.groups(GROUPS.map((g) => g.key));
+    }
+    const now = this.data.now;
+    if (el.contextValue === "topic" || el.contextValue === "ungrouped") {
+      return this.topicRows()
+        .filter((s) => s.topic === el.topic)
+        .map((s) => this.row(s, now, true));
     }
     if (el.contextValue !== "group") return [];
-    const g = GROUPS.find((x) => x.key === el.groupKey);
-    const now = this.data.now;
     return this.sessions()
       .filter((s) => s.bucket === el.groupKey)
       .sort((a, b) => (b.activity || 0) - (a.activity || 0))
-      .map((s) => {
-        const item = new vscode.TreeItem(s.title || s.id);
-        item.id = "session:" + (s.workstreamId || s.id);
-        item.sessionId = s.id;
-        item.leadId = s.leadId;
-        item.workstreamId = s.workstreamId;
-        item.leadDone = !!s.completed;
-        item.contextValue = `session;done=${s.completed ? 1 : 0};cont=${s.choice === "continue" ? 1 : 0}`;
-        item.description = age(now - (s.activity || s.last_ts || now)) + (s.codexOnly ? " · Codex" : "") + (s.count > 1 ? ` · ${s.count} chats` : s.continued ? " · continued" : "");
-        item.iconPath = new vscode.ThemeIcon(s.flag ? "star-full" : "circle-filled", new vscode.ThemeColor(g.color));
-        const tip = new vscode.MarkdownString();
-        tip.appendMarkdown(`**${(s.title || "").replace(/[*_`]/g, "")}**\n\n`);
-        if (s.detail) tip.appendText(s.detail + "\n\n");
-        if (s.last_text) tip.appendText(s.last_text + "\n\n");
-        tip.appendText(`${s.project || ""} · ${s.root}`);
-        item.tooltip = tip;
-        item.command = { command: "agentBoard.open", title: "Open session", arguments: [s.id] };
-        return item;
-      });
+      .map((s) => this.row(s, now, false));
   }
+}
+
+// Count tiles for the statuses worth a look, in their own collapsible view.
+const TILES = ["asking", "check", "active", "yourturn", "pending"];
+
+class Overview {
+  constructor(provider) {
+    this.provider = provider;
+    this.view = null;
+  }
+
+  resolveWebviewView(view) {
+    this.view = view;
+    view.webview.options = { enableScripts: true };
+    view.webview.html = overviewHtml();
+    // The page asks for counts each time it loads, which includes every re-show.
+    view.webview.onDidReceiveMessage((m) => (m.bucket ? vscode.commands.executeCommand("agentBoard.pick", m.bucket) : this.post()));
+    view.onDidDispose(() => (this.view = null));
+  }
+
+  visible() {
+    return !!this.view && this.view.visible;
+  }
+
+  // Counts ignore the search filter, so the tiles always show the whole board.
+  post() {
+    if (!this.view) return;
+    const rows = this.provider.sessions(true);
+    this.view.webview.postMessage({
+      down: !!this.provider.error && !this.provider.data,
+      tiles: TILES.map((key) => {
+        const g = GROUPS.find((x) => x.key === key);
+        return { key, label: g.label, color: g.color.replace(/\./g, "-"), n: rows.filter((s) => s.bucket === key).length };
+      }),
+    });
+  }
+}
+
+function overviewHtml() {
+  const nonce = crypto.randomBytes(16).toString("hex");
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'">
+<style nonce="${nonce}">
+  body { padding: 4px 10px 10px; }
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 6px; }
+  .tile {
+    border: none; border-radius: 7px; padding: 7px 9px; text-align: left; cursor: pointer;
+    font: inherit; color: var(--vscode-foreground);
+    background: color-mix(in srgb, var(--c) 18%, var(--vscode-sideBar-background));
+    box-shadow: inset 3px 0 0 var(--c);
+  }
+  .tile:hover { background: color-mix(in srgb, var(--c) 32%, var(--vscode-sideBar-background)); }
+  .tile:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+  .tile.zero { opacity: .5; cursor: default; }
+  .n { display: block; font-size: 18px; font-weight: 600; line-height: 1.15; }
+  .l { display: block; font-size: 11px; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #down { margin: 8px 0 0; font-size: 11px; opacity: .8; }
+</style>
+</head>
+<body>
+<div id="tiles"></div>
+<p id="down" hidden>Agent Board is not reachable</p>
+<script nonce="${nonce}">
+  const vscode = acquireVsCodeApi();
+  const tiles = document.getElementById("tiles");
+  window.addEventListener("message", (e) => {
+    document.getElementById("down").hidden = !e.data.down;
+    tiles.replaceChildren(...e.data.tiles.map((t) => {
+      const b = document.createElement("button");
+      b.className = "tile" + (t.n ? "" : " zero");
+      b.disabled = !t.n;
+      b.style.setProperty("--c", "var(--vscode-" + t.color + ")");
+      const n = document.createElement("span");
+      n.className = "n";
+      n.textContent = t.n;
+      const l = document.createElement("span");
+      l.className = "l";
+      l.textContent = t.label;
+      b.append(n, l);
+      b.addEventListener("click", () => vscode.postMessage({ bucket: t.key }));
+      return b;
+    }));
+  });
+  vscode.postMessage({});
+</script>
+</body>
+</html>`;
 }
 
 let startedAt = 0;
@@ -231,6 +398,11 @@ function activate(context) {
   const provider = new Provider();
   const view = vscode.window.createTreeView("agentBoard.sessions", { treeDataProvider: provider });
   context.subscriptions.push(view);
+  const overview = new Overview(provider);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("agentBoard.overview", overview),
+    provider.onDidChangeTreeData(() => overview.post())
+  );
 
   async function refresh() {
     try {
@@ -248,7 +420,7 @@ function activate(context) {
   let timer;
   function schedule() {
     clearInterval(timer);
-    timer = setInterval(() => view.visible && refresh(), cfg().refresh * 1000);
+    timer = setInterval(() => (view.visible || overview.visible()) && refresh(), cfg().refresh * 1000);
   }
 
   context.subscriptions.push(
@@ -310,6 +482,29 @@ function activate(context) {
       view.message = undefined;
       vscode.commands.executeCommand("setContext", "agentBoard.searching", false);
       provider.set(provider.data, provider.error);
+    }),
+    vscode.commands.registerCommand("agentBoard.toggleGroupBy", async () => {
+      const c = vscode.workspace.getConfiguration("agentBoard");
+      const next = c.get("groupBy", "status") === "topic" ? "status" : "topic";
+      await c.update("groupBy", next, vscode.ConfigurationTarget.Global);
+      if (next === "topic" && !provider.topics().length) {
+        vscode.window.showInformationMessage("Agent Board has no topics yet. Add them to agent_board_topics.json in its data folder.");
+      }
+    }),
+    // A tile click lists that status's rows, whichever way the list is grouped.
+    vscode.commands.registerCommand("agentBoard.pick", async (bucket) => {
+      const g = GROUPS.find((x) => x.key === bucket);
+      if (!g || !provider.data) return;
+      const now = provider.data.now;
+      const picked = await vscode.window.showQuickPick(
+        provider
+          .sessions(true)
+          .filter((s) => s.bucket === bucket)
+          .sort((a, b) => (b.activity || 0) - (a.activity || 0))
+          .map((s) => ({ label: s.title || s.id, description: age(now - (s.activity || s.last_ts || now)), id: s.id })),
+        { placeHolder: g.label }
+      );
+      if (picked) vscode.commands.executeCommand("agentBoard.open", picked.id);
     }),
     view.onDidChangeVisibility((e) => e.visible && refresh()),
     vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("agentBoard") && (schedule(), refresh())),

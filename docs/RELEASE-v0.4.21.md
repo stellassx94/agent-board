@@ -1,0 +1,13 @@
+# Agent Board v0.4.21
+
+This release builds on v0.4.20. It adds optional topics, so you can see your work by subject as well as by status, in the board and in the VS Code sidebar.
+
+- **Topics you define.** Copy `examples/topics.example.json` to `agent_board_topics.json` in the Agent Board data folder. Each topic has a label and keywords. A row joins the topic whose keywords match whole words in its title most often; the first topic wins a tie, and a topic with no keywords uses its own label. `folders` files a row by its working folder when no keyword matches. The rules use no model and send nothing anywhere. The board reads the file again whenever it changes. Without the file, nothing changes.
+- **The board shows and filters by topic.** Each row carries a small topic tag, and a topic menu beside the view switch limits the board to one topic or to rows with no topic. The status sections stay as they are.
+- **The sidebar can group by topic.** The list-tree icon switches between status groups and topic groups. The topic view keeps Asking you, Check me, Working and Your turn at the top, files the other live rows under their topic with the status on each row, and leaves Temporary and Completed at the bottom. Topics come from the board service, so the app and the sidebar agree.
+- **The sidebar has a collapsible Overview.** Count tiles show Asking you, Check me, Working, Your turn and Continue later. Click a tile to pick a session in that status.
+- **The sidebar shows ticket keys.** A row shows keys such as `ABC-1234` that it mentions, and search matches them. `agentBoard.ticketPrefixes` limits which prefixes count.
+- **One version for the app and the sidebar.** The sidebar now carries the app's version, and the release check refuses a mismatch. The sidebar moves from 0.3.4 to 0.4.21.
+- All other board behavior is unchanged. `agent_board_topics.json` is personal state; it stays outside the repository and the app package.
+
+The Apple Silicon macOS ZIP is `Agent-Board-v0.4.21-macos-arm64.zip` (SHA-256 `981075e431b36c9b6c2aa99809075bf0b6e7f44e609b5fedd54991289b0f9ed0`). The VS Code extension is `agent-board-sidebar-0.4.21.vsix` (SHA-256 `89a8cc844dfa45d55312c2bebb14885706462ae807da977f590343b76282bdcb`); it needs the v0.4.21 board service to show topics. The app targets macOS 13 or later, is ad-hoc signed and not notarized, and may require **Open Anyway**. The digests and packages come from the same release account, not independent publisher authentication; see [Security notes](SECURITY_NOTES.md). Publishing does not update an already-running local app; use **Check for updates…** in v0.4.9 or later.

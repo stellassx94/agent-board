@@ -45,6 +45,15 @@ class PrepareReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "app version differs"):
                 release.assert_safe_bundle(Path(tmp), "v0.4.9")
 
+    def test_sidebar_version_must_match_the_app(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "vscode-extension/package.json"
+            package.parent.mkdir()
+            package.write_text('{"version": "0.4.8"}')
+            with self.assertRaisesRegex(ValueError, "sidebar version 0.4.8 differs"):
+                release.check_sidebar_version("v0.4.9", Path(tmp))
+            release.check_sidebar_version("v0.4.8", Path(tmp))
+
 
 if __name__ == "__main__":
     unittest.main()

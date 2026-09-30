@@ -1,0 +1,29 @@
+{
+  "topics": [
+    {
+      "label": "Billing",
+      "match_any": [
+        "billing",
+        "invoice",
+        "refund"
+      ]
+    },
+    {
+      "label": "Search",
+      "match_any": [
+        "search",
+        "ranking"
+      ]
+    },
+    {
+      "label": "Tooling",
+      "match_any": []
+    }
+  ],
+  "folders": [
+    {
+      "match": "billing-service",
+      "label": "Billing"
+    }
+  ]
+}

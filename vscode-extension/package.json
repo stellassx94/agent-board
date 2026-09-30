@@ -2,7 +2,7 @@
 	"name": "agent-board-sidebar",
 	"displayName": "Agent Board Sidebar",
 	"description": "Compact sidebar list of your Claude Code and Codex sessions, fed by the local Agent Board.",
-	"version": "0.3.4",
+	"version": "0.4.21",
 	"icon": "media/logo.png",
 	"publisher": "stella-simsx",
 	"private": true,
@@ -30,8 +30,15 @@
 		"views": {
 			"agentBoard": [
 				{
+					"type": "webview",
+					"id": "agentBoard.overview",
+					"name": "Overview",
+					"initialSize": 1
+				},
+				{
 					"id": "agentBoard.sessions",
-					"name": "Sessions"
+					"name": "Sessions",
+					"initialSize": 5
 				}
 			]
 		},
@@ -84,10 +91,24 @@
 				"command": "agentBoard.clearContinue",
 				"title": "Remove from Continue later",
 				"icon": "$(close)"
+			},
+			{
+				"command": "agentBoard.toggleGroupBy",
+				"title": "Group by status or topic",
+				"icon": "$(list-tree)"
+			},
+			{
+				"command": "agentBoard.pick",
+				"title": "Pick a session by status"
 			}
 		],
 		"menus": {
 			"view/title": [
+				{
+					"command": "agentBoard.toggleGroupBy",
+					"when": "view == agentBoard.sessions",
+					"group": "navigation@0"
+				},
 				{
 					"command": "agentBoard.search",
 					"when": "view == agentBoard.sessions",
@@ -132,6 +153,10 @@
 				},
 				{
 					"command": "agentBoard.clearContinue",
+					"when": "false"
+				},
+				{
+					"command": "agentBoard.pick",
 					"when": "false"
 				}
 			],
@@ -205,6 +230,23 @@
 					"type": "number",
 					"default": 10,
 					"description": "How often the list refreshes."
+				},
+				"agentBoard.groupBy": {
+					"type": "string",
+					"enum": [
+						"status",
+						"topic"
+					],
+					"default": "status",
+					"description": "Group the list by status, or by the topics the Agent Board service reports. The topic view keeps the statuses that need you at the top."
+				},
+				"agentBoard.ticketPrefixes": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Ticket prefixes to show on rows, such as ABC for ABC-1234. Empty shows any prefix."
 				}
 			}
 		}

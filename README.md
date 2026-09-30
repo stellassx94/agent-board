@@ -27,6 +27,8 @@ The default sources are `~/.claude/projects` and `~/.codex/sessions`. Missing so
 
 Settings, board choices, and confirmed workstream links live in `~/.agent-board/`, outside the clone. Create that folder and copy `examples/config.example.json` to `~/.agent-board/config.json` to change sources or opening behavior. You may also copy `examples/custom.example.css` to `~/.agent-board/custom.css` to change colors, spacing, and layout. The custom CSS loads after the built-in styles, so your design survives source updates.
 
+To group work by topic, copy `examples/topics.example.json` to `~/.agent-board/agent_board_topics.json`. Each topic has a label and keywords; a row joins the topic whose keywords match whole words in its title most often, and the first topic wins a tie. A topic with no keywords uses its own label. `folders` files a row by its working folder when no keyword matches. The board shows the topic on each row and adds a topic filter; the VS Code sidebar can group by it. The file is read again whenever it changes.
+
 The supported config fields are:
 
 | Field | Purpose |

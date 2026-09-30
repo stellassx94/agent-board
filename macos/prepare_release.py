@@ -37,7 +37,7 @@ STATE_NAMES = {
     "config.json", "custom.css", "agent_board_completed.json",
     "agent_board_choices.json", "agent_board_flags.json",
     "agent_board_suggestions.json", "agent_board_lineage.json",
-    "agent_board_prompts.json",
+    "agent_board_prompts.json", "agent_board_topics.json",
 }
 
 
@@ -117,6 +117,14 @@ def check_sources():
             continue
         scan_source(name, path.read_bytes())
     print("Diff and source privacy scan: OK", flush=True)
+
+
+def check_sidebar_version(version, root=ROOT):
+    """The VS Code sidebar ships with the app, so both carry one version."""
+    sidebar = json.loads((root / "vscode-extension/package.json").read_text()).get("version")
+    if sidebar != version.removeprefix("v"):
+        raise ValueError(f"VS Code sidebar version {sidebar} differs from VERSION {version}")
+    print("Sidebar version: OK", flush=True)
 
 
 def check_clean_profile(executable, version):
@@ -203,6 +211,7 @@ def main():
         print(f"Checking Agent Board {version}...", flush=True)
         run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests", "-q")
         check_sources()
+        check_sidebar_version(version)
         check_clean_profile(ROOT / "agent_board.py", version)
         if not args.check_only:
             prepare(version)
