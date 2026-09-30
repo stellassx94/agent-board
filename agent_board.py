@@ -917,6 +917,111 @@ def load_prompts():
         return {}
 
 
+CLAUDE_SETTINGS = Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "settings.json"
+# (event, matcher, script, mode, what the board cannot do without it)
+HOOK_SPECS = (
+    ("Notification", "permission_prompt", "agent_board_classify.py", "capture-prompt", "permission prompts"),
+    ("PostToolUse", "Bash", "agent_board_workstreams.py", "capture-tool", "instant resume links"),
+    ("Stop", None, "agent_board_classify.py", "", "completion suggestions"),
+    ("Stop", None, "agent_board_workstreams.py", "capture-stop", "resume links"),
+)
+HOOK_SCRIPT_RE = re.compile(r'"([^"]*agent_board_(?:classify|workstreams)\.py)"|(\S*agent_board_(?:classify|workstreams)\.py)')
+
+
+def hook_backend_dir():
+    """Folder that holds the hook scripts: beside this file, or the app's Backend."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent.parent / "Backend"
+    return Path(__file__).resolve().parent
+
+
+def hook_mode(command):
+    """Return (script, mode) when a settings command is an Agent Board hook."""
+    if not isinstance(command, str):
+        return None
+    if "agent_board_workstreams.py" in command:
+        mode = next((m for m in ("capture-tool", "capture-stop") if m in command), None)
+        return ("agent_board_workstreams.py", mode) if mode else None
+    if "agent_board_classify.py" in command:
+        return ("agent_board_classify.py", "capture-prompt" if "capture-prompt" in command else "")
+    return None
+
+
+def hook_commands(settings, event):
+    groups = (settings.get("hooks") or {}).get(event) or []
+    for group in groups if isinstance(groups, list) else []:
+        for hook in (group.get("hooks") or []) if isinstance(group, dict) else []:
+            if isinstance(hook, dict):
+                yield hook.get("command")
+
+
+def hook_script_exists(command):
+    m = HOOK_SCRIPT_RE.search(command)
+    return bool(m) and Path(m.group(1) or m.group(2)).expanduser().is_file()
+
+
+def hook_status():
+    """Report which optional Claude Code hooks are absent. Never writes."""
+    backend = hook_backend_dir()
+    if not CLAUDE_SETTINGS.parent.is_dir() or not all((backend / s[2]).is_file() for s in HOOK_SPECS):
+        return {"available": False, "missing": []}
+    try:
+        settings = json.loads(CLAUDE_SETTINGS.read_text()) if CLAUDE_SETTINGS.exists() else {}
+        if not isinstance(settings, dict):
+            raise ValueError
+    except (OSError, ValueError):
+        return {"available": False, "missing": []}
+    missing = [label for event, _, script, mode, label in HOOK_SPECS
+               if not any(hook_mode(c) == (script, mode) and hook_script_exists(c)
+                          for c in hook_commands(settings, event))]
+    return {"available": True, "missing": missing}
+
+
+def install_hooks():
+    """Add the Agent Board hooks to Claude Code settings after saving a backup."""
+    backend = hook_backend_dir()
+    if any(ch in str(backend) for ch in '"$`\\') or not all((backend / s[2]).is_file() for s in HOOK_SPECS):
+        raise ValueError("hook scripts not found")
+    raw = CLAUDE_SETTINGS.read_bytes() if CLAUDE_SETTINGS.exists() else None
+    settings = json.loads(raw) if raw else {}
+    if not isinstance(settings, dict) or not isinstance(settings.setdefault("hooks", {}), dict):
+        raise ValueError("unexpected Claude Code settings")
+    hooks = settings["hooks"]
+    wanted = {(s[2], s[3]) for s in HOOK_SPECS}
+    for event in list(hooks):
+        if not isinstance(hooks[event], list):
+            continue
+        for group in hooks[event]:
+            if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+                group["hooks"] = [h for h in group["hooks"]
+                                  if not (isinstance(h, dict) and hook_mode(h.get("command")) in wanted)]
+        hooks[event] = [g for g in hooks[event] if not (isinstance(g, dict) and g.get("hooks") == [])]
+    python = "/usr/bin/python3" if Path("/usr/bin/python3").exists() else "python3"
+    data_dir = os.environ.get("AGENT_BOARD_DATA_DIR")
+    prefix = f'AGENT_BOARD_DATA_DIR="{data_dir}" ' if data_dir and not any(ch in data_dir for ch in '"$`\\') else ""
+    for event, matcher, script, mode, _ in HOOK_SPECS:
+        groups = hooks.setdefault(event, [])
+        if not isinstance(groups, list):
+            raise ValueError("unexpected Claude Code settings")
+        group = next((g for g in groups if isinstance(g, dict) and isinstance(g.get("hooks"), list)
+                      and (g.get("matcher") or None) == matcher), None)
+        if group is None:
+            group = {"matcher": matcher, "hooks": []} if matcher else {"hooks": []}
+            groups.append(group)
+        # A missing or moved app must never interrupt Claude Code.
+        command = f'{prefix}{python} -B "{backend / script}"{" " + mode if mode else ""} 2>/dev/null || true'
+        group["hooks"].append({"type": "command", "command": command, "timeout": 10})
+    if raw is not None:
+        backups = DATA_DIR / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        (backups / f"claude-settings-{time.strftime('%Y%m%d-%H%M%S')}.json").write_bytes(raw)
+    tmp = CLAUDE_SETTINGS.with_name(CLAUDE_SETTINGS.name + ".agent-board.tmp")
+    tmp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+    if raw is not None:
+        os.chmod(tmp, CLAUDE_SETTINGS.stat().st_mode & 0o777)
+    tmp.replace(CLAUDE_SETTINGS)
+
+
 def load_suggestions():
     try:
         return json.loads(SUGGESTIONS_FILE.read_text())
@@ -1177,7 +1282,7 @@ def status(hours):
                 by_id[sid]["bucket"] = "completed"
     link_suggestions = ws.link_suggestions(rows, lineage)
     result = {"now": now, "version": BOARD_VERSION, "claude_processes": n_claude, "sessions": rows,
-              "workstreams": workstreams, "link_suggestions": link_suggestions}
+              "workstreams": workstreams, "link_suggestions": link_suggestions, "hooks": hook_status()}
     _recent_status = (hours, time.monotonic(), rows)
     return result
 
@@ -1239,7 +1344,7 @@ details.list-section>summary.list-head{list-style:none;cursor:pointer}details.li
 <div class="sidebar-label">Archive</div><div class="nav"><button type="button" data-nav="archive" aria-label="Other work" title="Other work"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v4H4zM6 8v12h12V8M10 12h4"/></svg></span><span class="nav-label">Other work</span><span class="number" id="nav-archive">0</span></button></div><div class="sidebar-spacer"></div><div class="sidebar-note">Local session board<br>Choices remain under your control.</div></aside>
 <div class="main" id="overview"><div class="masthead"><div class="toolbar"><span class="crumb">Workspace &nbsp;/&nbsp; <strong>Overview</strong></span><div class="view-switch" aria-label="View"><button id="view-workstreams" data-view="workstreams" type="button" aria-pressed="true">Workstreams</button><button id="view-sessions" data-view="sessions" type="button" aria-pressed="false">Sessions</button></div><span class="toolbar-spacer"></span><span class="live" id="updated">Connecting…</span><label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search current view" aria-label="Search current view"></label><button class="release-button" id="releases" type="button" title="See version and published releases">Releases ↗</button></div><div class="status-strip" aria-label="Board status counts"><button class="ask" type="button" data-jump="attention"><span class="status-dot"></span><strong id="metric-ask">0</strong><span>Asking you</span></button><button class="check" type="button" data-jump="attention"><span class="status-dot"></span><strong id="metric-check">0</strong><span>Check me</span></button><button class="review" type="button" data-jump="attention"><span class="status-dot"></span><strong id="metric-review">0</strong><span>Your turn</span></button><button class="work" type="button" data-jump="working"><span class="status-dot"></span><strong id="metric-work">0</strong><span>Working</span></button><button class="later" type="button" data-jump="later"><span class="status-dot"></span><strong id="metric-later">0</strong><span>Continue later</span></button><button class="idle" type="button" data-jump="archive"><span class="status-dot"></span><strong id="metric-idle">0</strong><span>Idle</span></button></div></div>
 <main class="page"><div class="page-title"><div><h1>Overview</h1><p>Workstreams across Claude and Codex · select a row to review details</p></div><div class="filters" aria-label="Agent filter"><button type="button" data-agent="all" aria-pressed="true">All</button><button type="button" data-agent="claude" aria-pressed="false">Claude</button><button type="button" data-agent="codex" aria-pressed="false">Codex</button></div></div>
-<div class="workspace-grid"><div class="lists"><details class="list-section" id="attention"><summary class="list-head"><h2>Needs your attention</h2><span class="count" id="count-attention">0</span><small>Review and decide the next step</small></summary><div class="section-content"><div class="group-head ask" data-group="asking"><span class="dot"></span>Asking you <span class="count" id="count-ask">0</span><span>Question or permission</span></div><div id="list-ask"></div><div class="group-head check" data-group="check"><span class="dot"></span>Check me <span class="count" id="count-check">0</span><span>May need intervention</span></div><div id="list-check"></div><div class="group-head review" data-group="yourturn"><span class="dot"></span>Your turn <span class="count" id="count-review">0</span><span>Agent replied</span></div><div id="list-review"></div></div></details>
+<div class="workspace-grid"><div class="lists"><section class="list-section" id="hook-section" hidden><div class="list-head"><h2>Finish setup for Claude Code</h2><small>One time</small></div><div class="linkitem"><div class="pair"><b>Claude Code hooks are not set up</b><small id="hook-text"></small></div><button class="action primary" type="button" data-action="installhooks">Add hooks</button><button class="action subtle" type="button" data-action="skiphooks">Not now</button></div></section><details class="list-section" id="attention"><summary class="list-head"><h2>Needs your attention</h2><span class="count" id="count-attention">0</span><small>Review and decide the next step</small></summary><div class="section-content"><div class="group-head ask" data-group="asking"><span class="dot"></span>Asking you <span class="count" id="count-ask">0</span><span>Question or permission</span></div><div id="list-ask"></div><div class="group-head check" data-group="check"><span class="dot"></span>Check me <span class="count" id="count-check">0</span><span>May need intervention</span></div><div id="list-check"></div><div class="group-head review" data-group="yourturn"><span class="dot"></span>Your turn <span class="count" id="count-review">0</span><span>Agent replied</span></div><div id="list-review"></div></div></details>
 <details class="list-section" id="working"><summary class="list-head"><h2>Working</h2><span class="count" id="count-work">0</span><small>Active sessions</small></summary><div class="section-content"><div id="list-work"></div></div></details>
 <details class="list-section" id="later"><summary class="list-head"><h2>Continue later</h2><span class="count" id="count-later">0</span><small>Saved for later</small></summary><div class="section-content"><div id="list-later"></div></div></details>
 <details class="list-section" id="archive"><summary class="list-head"><h2>Other work</h2><span class="count" id="count-archive">0</span><small>Manual states stay distinct</small></summary><div class="section-content"><div class="group-head later" data-group="suggested"><span class="dot"></span>Suggestions to review <span class="count" id="count-suggested">0</span><span>Advisory</span></div><div id="list-suggested"></div><div class="group-head idle" data-group="idle"><span class="dot"></span>Idle <span class="count" id="count-idle">0</span><span>No recent activity</span></div><div id="list-idle"></div><div class="group-head done" data-group="completed"><span class="dot"></span>Completed <span class="count" id="count-done">0</span><span>Confirmed by you</span></div><div id="list-done"></div><div class="group-head temporary" data-group="temporary"><span class="dot"></span>Temporary <span class="count" id="count-temporary">0</span><span>Manual state</span></div><div id="list-temporary"></div></div></details>
@@ -1319,6 +1424,9 @@ function render(){if(!data)return;hideActionTooltip();const items=(view==='works
  $('#link-list').innerHTML=links.map(x=>`<div class="linkitem"><div class="pair"><b>${escapeHTML(x.child_title)}</b> → ${escapeHTML(x.parent_title)}<small>${escapeHTML(x.reason)}</small></div>${action('accept',x.child,'Link',`data-parent="${escapeHTML(x.parent)}"`)}${action('reject',x.child,'Dismiss',`data-parent="${escapeHTML(x.parent)}"`)}</div>`).join('');
  $('#updated').textContent=`Live · updated ${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · ${data.version||'local copy'}`;$('#updated').classList.remove('offline');document.title=`Agent Board · ${attention} need attention`;
  $('#release-service-version').textContent=data.version||'local copy';
+ const hooks=data.hooks||{},missing=hooks.missing||[];let skipped='';try{skipped=localStorage.getItem('hooksSkipped')||''}catch(e){}
+ $('#hook-section').hidden=!hooks.available||!missing.length||skipped===missing.join();
+ $('#hook-text').textContent=`Without them the board cannot show: ${missing.join(', ')}. Add hooks writes them to your Claude Code settings.json and first saves a copy in the Agent Board backups folder.`;
 }
 let tickBusy=false;
 async function tick(){if(tickBusy)return;tickBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('Offline');data=await r.json();render()}catch(e){$('#updated').textContent='Board service offline';$('#updated').classList.add('offline');document.title='Agent Board offline'}finally{tickBusy=false}}
@@ -1341,6 +1449,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  else if(a==='accept'||a==='linktarget'){await post('/api/link',{child:a==='linktarget'?linkChild:id,parent:a==='linktarget'?id:b.dataset.parent});$('#link-dialog').close()}
  else if(a==='reject')await post('/api/link-reject',{child:id,parent:b.dataset.parent});
  else if(a==='unlink')await post('/api/unlink',{child:id});
+ else if(a==='installhooks'){if(b.dataset.armed!=='1'){b.dataset.armed='1';b.textContent='Confirm: edit settings.json';return}await post('/api/install-hooks',{})}
+ else if(a==='skiphooks'){try{localStorage.setItem('hooksSkipped',(data.hooks?.missing||[]).join())}catch(e){}render()}
  else if(a==='link'){const s=data.sessions.find(x=>x.id===id);if(s.linked_from)await post('/api/unlink',{child:id});else{linkChild=id;$('#link-search').value='';linkResults();$('#link-dialog').showModal()}}
  }catch(err){alert(err.message)}});
 $('#search').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render()});$('#link-search').addEventListener('input',linkResults);$('#link-cancel').addEventListener('click',()=>$('#link-dialog').close());
@@ -1378,7 +1488,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204 if ok else 404)
             self.end_headers()
             return
-        if not self.path.startswith(("/api/flag", "/api/complete", "/api/choice", "/api/link", "/api/unlink", "/api/link-reject", "/api/group-complete")):
+        if not self.path.startswith(("/api/flag", "/api/complete", "/api/choice", "/api/link", "/api/unlink", "/api/link-reject", "/api/group-complete", "/api/install-hooks")):
             self.send_error(404)
             return
         try:
@@ -1391,6 +1501,8 @@ class Handler(BaseHTTPRequestHandler):
                 save_choice(str(d["id"]), str(d["choice"]))
             elif self.path.startswith("/api/group-complete"):
                 ws.complete(str(d["id"]), bool(d.get("on")))
+            elif self.path.startswith("/api/install-hooks"):
+                install_hooks()
             elif self.path.startswith("/api/link-reject"):
                 ws.reject(str(d["child"]), str(d["parent"]))
             elif self.path.startswith("/api/unlink"):

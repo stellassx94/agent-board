@@ -8,6 +8,10 @@ The pilot assumes a managed Mac used by one person. A random per-install key is 
 
 Revisit this before using Agent Board on shared Macs or expanding its local API. Generate the key on first launch, store it in a user-only file, require it on every API request, and keep the existing `Host` and `Origin` checks. Do not put the key in a URL or commit it to Git. Test the Mac window, browser view, SwiftBar plugin, and app restart together.
 
+## Hook setup writes Claude Code settings
+
+From v0.4.20 the local API has one request, `/api/install-hooks`, that writes outside the Agent Board data folder: it adds the board's own hook commands to the user's Claude Code `settings.json` after saving a copy. The request takes no input. The commands are fixed, run only the hook scripts shipped beside the running board, and end in `|| true` so a moved or removed app cannot interrupt Claude Code. Like the rest of the local API it has no authentication, so another local process running as the same person could trigger it; that process could not choose what is written. The `Host` and `Origin` checks apply. Include this request when the private key for the local board connection is added.
+
 ## App updater trust model
 
 The Mac app checks for updates only when the user selects **Check for updates** in the menu bar or in the app window. In a regular browser, the board instead links to published releases; it cannot invoke the native installer. The Mac app reads the latest non-draft, non-prerelease version from the public `stellassx94/agent-board` GitHub release API over HTTPS. It shows the version before offering a separate **Download and install** action and requires a final **Install and relaunch** confirmation. It never installs on launch or in the background.
