@@ -249,7 +249,22 @@ def main():
             pass
         print("{}")
         return
-    raise SystemExit("Usage: agent_board_workstreams.py resume-source ID | capture-stop")
+    if command == "capture-tool":
+        # PostToolUse hook: link as soon as the resume marker command runs,
+        # so the new chat merges while it is still working.
+        try:
+            hook = json.load(sys.stdin)
+            child = str(hook.get("session_id") or "")
+            cmd = (hook.get("tool_input") or {}).get("command", "")
+            matches = {m.group(2) for m in MARKER_RE.finditer(cmd if isinstance(cmd, str) else "")}
+            parent = next(iter(matches)) if len(matches) == 1 else None
+            if valid_id(child) and parent and child != parent and child not in load()["links"]:
+                link(child, parent, "resume")
+        except Exception:
+            pass
+        print("{}")
+        return
+    raise SystemExit("Usage: agent_board_workstreams.py resume-source ID | capture-stop | capture-tool")
 
 
 if __name__ == "__main__":

@@ -88,10 +88,33 @@ class Provider {
     this._emitter.fire();
   }
 
+  // One row per workstream, like the board's default view, so resumed chats
+  // merge into their original row and the counts match the app.
+  // Older services without workstreams fall back to one row per session.
   sessions() {
     if (!this.data) return [];
     const f = this.filter.toLowerCase();
-    return this.data.sessions.filter((s) => !f || (s.title || "").toLowerCase().includes(f));
+    const byId = new Map(this.data.sessions.map((s) => [s.id, s]));
+    const rows = this.data.workstreams
+      ? this.data.workstreams.map((w) => {
+          const lead = byId.get(w.lead_id) || {};
+          return {
+            ...lead,
+            id: w.latest_id || w.lead_id || w.id,
+            workstreamId: w.id,
+            leadId: w.lead_id,
+            title: w.title,
+            bucket: w.bucket,
+            activity: w.activity,
+            flag: w.flag,
+            completed: w.completed || (w.session_count === 1 && !!lead.completed),
+            detail: w.detail || lead.detail,
+            count: w.session_count || 1,
+            codexOnly: (w.roots || []).length > 0 && w.roots.every((r) => r === "codex"),
+          };
+        })
+      : this.data.sessions.map((s) => ({ ...s, leadId: s.id, count: 1, codexOnly: s.root === "codex" }));
+    return rows.filter((s) => !f || (s.title || "").toLowerCase().includes(f));
   }
 
   getTreeItem(el) {
@@ -132,10 +155,13 @@ class Provider {
       .sort((a, b) => (b.activity || 0) - (a.activity || 0))
       .map((s) => {
         const item = new vscode.TreeItem(s.title || s.id);
-        item.id = "session:" + s.id;
+        item.id = "session:" + (s.workstreamId || s.id);
         item.sessionId = s.id;
+        item.leadId = s.leadId;
+        item.workstreamId = s.workstreamId;
+        item.leadDone = !!s.completed;
         item.contextValue = `session;done=${s.completed ? 1 : 0};cont=${s.choice === "continue" ? 1 : 0}`;
-        item.description = age(now - (s.activity || s.last_ts || now)) + (s.root === "codex" ? " · Codex" : "") + (s.continued ? " · continued" : "");
+        item.description = age(now - (s.activity || s.last_ts || now)) + (s.codexOnly ? " · Codex" : "") + (s.count > 1 ? ` · ${s.count} chats` : s.continued ? " · continued" : "");
         item.iconPath = new vscode.ThemeIcon(s.flag ? "star-full" : "circle-filled", new vscode.ThemeColor(g.color));
         const tip = new vscode.MarkdownString();
         tip.appendMarkdown(`**${(s.title || "").replace(/[*_`]/g, "")}**\n\n`);
@@ -211,7 +237,7 @@ function activate(context) {
       const data = JSON.parse(await request("GET", "/api/status"));
       provider.set(data, null);
       stopStaleService(data.version);
-      const n = data.sessions.filter((s) => ["asking", "check", "yourturn"].includes(s.bucket)).length;
+      const n = (data.workstreams || data.sessions).filter((s) => ["asking", "check", "yourturn"].includes(s.bucket)).length;
       view.badge = n ? { value: n, tooltip: `${n} need you` } : undefined;
     } catch (e) {
       startBoard();
@@ -234,16 +260,21 @@ function activate(context) {
         vscode.window.showErrorMessage("Could not open session: " + (e.message || e));
       }
     }),
+    // Done acts on the whole workstream; Continue later acts on its lead chat,
+    // the same targets the board's own buttons use.
     ...[
-      ["agentBoard.markDone", "/api/complete", (id) => ({ id, on: true })],
-      ["agentBoard.undoDone", "/api/complete", (id) => ({ id, on: false })],
-      ["agentBoard.continueLater", "/api/choice", (id) => ({ id, choice: "continue" })],
-      ["agentBoard.clearContinue", "/api/choice", (id) => ({ id, choice: "clear" })],
-    ].map(([cmd, urlPath, body]) =>
+      ["agentBoard.markDone", (it) => [it.workstreamId ? ["/api/group-complete", { id: it.workstreamId, on: true }] : ["/api/complete", { id: it.sessionId, on: true }]]],
+      ["agentBoard.undoDone", (it) => [
+        ...(it.workstreamId ? [["/api/group-complete", { id: it.workstreamId, on: false }]] : []),
+        ...(!it.workstreamId || it.leadDone ? [["/api/complete", { id: it.leadId || it.sessionId, on: false }]] : []),
+      ]],
+      ["agentBoard.continueLater", (it) => [["/api/choice", { id: it.leadId || it.sessionId, choice: "continue" }]]],
+      ["agentBoard.clearContinue", (it) => [["/api/choice", { id: it.leadId || it.sessionId, choice: "clear" }]]],
+    ].map(([cmd, calls]) =>
       vscode.commands.registerCommand(cmd, async (item) => {
         if (!item || !item.sessionId) return;
         try {
-          await request("POST", urlPath, body(item.sessionId));
+          for (const [urlPath, body] of calls(item)) await request("POST", urlPath, body);
           await refresh();
         } catch (e) {
           vscode.window.showErrorMessage("Agent Board update failed: " + (e.message || e));
