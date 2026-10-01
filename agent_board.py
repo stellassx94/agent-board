@@ -852,6 +852,7 @@ def resume_in_new_chat(sid, hours):
 FLAGS_FILE = DATA_DIR / "agent_board_flags.json"
 COMPLETED_FILE = DATA_DIR / "agent_board_completed.json"
 CHOICES_FILE = DATA_DIR / "agent_board_choices.json"
+TOPIC_CHOICES_FILE = DATA_DIR / "agent_board_topic_choices.json"
 SUGGESTIONS_FILE = DATA_DIR / "agent_board_suggestions.json"
 PROMPTS_FILE = Path(os.environ.get("AGENT_BOARD_PROMPTS_FILE", str(DATA_DIR / "agent_board_prompts.json"))).expanduser()
 TOPICS_FILE = Path(os.environ.get("AGENT_BOARD_TOPICS_FILE", str(DATA_DIR / "agent_board_topics.json"))).expanduser()
@@ -945,6 +946,16 @@ def load_choices():
         return json.loads(CHOICES_FILE.read_text())
     except (OSError, ValueError):
         return {}
+
+
+def load_topic_choices():
+    """Groups the user picked by hand, per scope: {"session": {id: label}, "workstream": {id: label}}."""
+    try:
+        raw = json.loads(TOPIC_CHOICES_FILE.read_text())
+    except (OSError, ValueError):
+        raw = {}
+    return {scope: {k: v["topic"] for k, v in (raw.get(scope) or {}).items() if isinstance(v, dict) and v.get("topic")}
+            for scope in ("session", "workstream")}
 
 
 def load_prompts():
@@ -1080,6 +1091,27 @@ def save_choice(sid, choice):
         tmp = CHOICES_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(choices, indent=1))
         tmp.replace(CHOICES_FILE)
+
+
+def save_topic_choice(sid, scope, topic):
+    """Pin a session or workstream to a group; an empty topic returns it to keyword matching."""
+    topic = re.sub(r"\s+", " ", str(topic)).strip()
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid) or scope not in ("session", "workstream") or len(topic) > 80:
+        raise ValueError("invalid topic choice")
+    with _completed_lock:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            raw = json.loads(TOPIC_CHOICES_FILE.read_text())
+        except (OSError, ValueError):
+            raw = {}
+        picks = raw.setdefault(scope, {})
+        if topic:
+            picks[sid] = {"topic": topic, "at": time.time()}
+        else:
+            picks.pop(sid, None)
+        tmp = TOPIC_CHOICES_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(raw, indent=1))
+        tmp.replace(TOPIC_CHOICES_FILE)
 
 
 def save_completed(sid, on):
@@ -1329,16 +1361,27 @@ def status(hours):
                 by_id[sid]["underlying_bucket"] = by_id[sid]["bucket"]
                 by_id[sid]["bucket"] = "completed"
     topics, folders = load_topics()
+    picked = load_topic_choices()
     for r in rows:
-        r["topic"] = topic_for(r["title"], r.get("cwd"), topics, folders)
+        r["auto_topic"] = topic_for(r["title"], r.get("cwd"), topics, folders)
     for group in workstreams:
-        # The workstream's own title decides first, then its newest filed chat.
-        group["topic"] = (topic_for(group["title"], None, topics, folders)
-                          or next((by_id[sid]["topic"] for sid in group["session_ids"] if by_id[sid]["topic"]), None))
+        # A hand-picked group wins, then the workstream's own title, then its newest filed chat.
+        group["topic_pinned"] = group["id"] in picked["workstream"]
+        group["auto_topic"] = (topic_for(group["title"], None, topics, folders)
+                               or next((by_id[sid]["auto_topic"] for sid in group["session_ids"] if by_id[sid]["auto_topic"]), None))
+        group["topic"] = (picked["workstream"].get(group["id"])
+                          or next((picked["session"][sid] for sid in group["session_ids"] if sid in picked["session"]), None)
+                          or group["auto_topic"])
+    ws_topic = {sid: picked["workstream"][g["id"]] for g in workstreams if g["id"] in picked["workstream"] for sid in g["session_ids"]}
+    for r in rows:
+        r["topic_pinned"] = r["id"] in picked["session"]
+        r["topic"] = picked["session"].get(r["id"]) or ws_topic.get(r["id"]) or r["auto_topic"]
+    topic_names = [label for label, _ in topics]
+    topic_names += sorted({t for scope in picked.values() for t in scope.values()} - set(topic_names))
     link_suggestions = ws.link_suggestions(rows, lineage)
     result = {"now": now, "version": BOARD_VERSION, "claude_processes": n_claude, "sessions": rows,
               "workstreams": workstreams, "link_suggestions": link_suggestions, "hooks": hook_status(),
-              "topics": [label for label, _ in topics]}
+              "topics": topic_names}
     _recent_status = (hours, time.monotonic(), rows)
     return result
 
@@ -1364,7 +1407,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
 .row-copy strong{font-weight:600}
 .detail-head strong{font-weight:650}
 .detail-title{font-size:20px;font-weight:680}
-.detail-status,.detail-label{font-weight:650}
+.detail-status,.detail-label{font-weight:650}.topic-pick{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:#6b7280}.topic-pick select{font:inherit;color:#111827;border:1px solid #e7e9ee;border-radius:6px;padding:3px 6px;background:#fff;max-width:260px}
 .action{font-weight:650}
 .group-head.idle{--tone:var(--grey)}.group-head.done{--tone:var(--green)}.group-head.temporary{--tone:var(--purple)}.work-row.done{--tone:var(--green)}.work-row.temporary{--tone:var(--purple)}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:50;background:#243247;color:white;border-radius:7px;padding:9px 13px;font-size:11px;box-shadow:0 8px 24px #15203428}.toast[hidden]{display:none}
@@ -1468,13 +1511,15 @@ function detail(x){if(!x)return '<div class="empty">Select a workstream to see i
  const status=b==='yourturn'&&x.needs_completion?'Your turn':LABEL[b]||'Idle';
  const context=b==='asking'?'The agent is asking a question or permission. Open the latest session to respond.':b==='check'?'The session may need intervention. Open it to verify what is happening.':b==='yourturn'?'The agent replied. Review the result and decide the next step.':b==='idle'?'There is no recent activity. Idle does not mean complete.':detailOf(x);
  const completionConfirmed=x.completed||(isGroup&&l?.completed),completionSource=x.completed?x.completion_source:l?.completion_source,completionText=!completionConfirmed?'Not confirmed':completionSource==='chat-parked'?'Session done · starred for later':completionSource==='chat-closeout'?'Confirmed from chat':'Confirmed by you';
- return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'green',active:'blue',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${action('resumenew',last?.id||x.id,'Handoff to new session')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${action('resumenew',s.id,'Handoff')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
+ return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'green',active:'blue',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${topicPicker(x,isGroup)}${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${action('resumenew',last?.id||x.id,'Handoff to new session')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${action('resumenew',s.id,'Handoff')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
+function topicPicker(x,isGroup){const names=data.topics||[];if(!names.length)return '';const cur=x.topic_pinned?x.topic:'',opt=(v,t)=>`<option value="${escapeHTML(v)}"${v===cur?' selected':''}>${escapeHTML(t)}</option>`;
+ return `<label class="topic-pick">Group <select data-topic-pick="${escapeHTML(x.id)}" data-scope="${isGroup?'workstream':'session'}">${opt('',`Auto${x.auto_topic?' ('+x.auto_topic+')':' (No topic)'}`)}${names.map(n=>opt(n,n)).join('')}<option value="__new__">New group…</option></select></label>`}
 function renderTopicSections(items){const names=data.topics||[],box=$('#topic-sections');topicOn=groupBy==='topic'&&names.length>0;$('#group-switch').hidden=!names.length;$('#group-status').setAttribute('aria-pressed',String(!topicOn));$('#group-topic').setAttribute('aria-pressed',String(topicOn));box.hidden=!topicOn;$('#later').hidden=topicOn;if(!topicOn){box.innerHTML='';return}
  const rows=items.filter(x=>TOPIC_BUCKETS.includes(x.bucket));
  box.innerHTML=[...names,''].map(name=>{const xs=rows.filter(x=>(x.topic||'')===name);if(!xs.length)return '';
   const live=xs.filter(x=>x.bucket!=='idle').sort((a,b)=>TOPIC_BUCKETS.indexOf(a.bucket)-TOPIC_BUCKETS.indexOf(b.bucket)),idle=xs.filter(x=>x.bucket==='idle'),showIdle=!!query||idleTopics.has(name);
   return `<details class="list-section topic-section" data-topic="${escapeHTML(name)}"${query||openTopics.has(name)?' open':''}><summary class="list-head"><h2>${escapeHTML(name||'No topic')}</h2><span class="count">${xs.length}</span><small>${live.length} to pick up · ${idle.length} idle</small></summary><div class="section-content">${live.map(row).join('')}${showIdle?idle.map(row).join(''):''}${idle.length&&!query?`<button class="show-idle" type="button" data-idle="${escapeHTML(name)}">${showIdle?'Hide':'Show'} ${idle.length} idle</button>`:''}</div></details>`}).join('')}
-function render(){if(!data)return;hideActionTooltip();const items=(view==='workstreams'?data.workstreams:data.sessions).filter(visible),groups=Object.fromEntries(Object.keys(LABEL).map(k=>[k,items.filter(x=>x.bucket===k)]));
+function render(){if(!data||document.activeElement?.matches?.('select[data-topic-pick]'))return;hideActionTooltip();const items=(view==='workstreams'?data.workstreams:data.sessions).filter(visible),groups=Object.fromEntries(Object.keys(LABEL).map(k=>[k,items.filter(x=>x.bucket===k)]));
  renderTopicSections(items);
  if(!items.some(x=>x.id===selected))selected=items.find(x=>['asking','check','yourturn'].includes(x.bucket))?.id||items[0]?.id||null;
  for(const [bucket,id] of Object.entries({asking:'ask',check:'check',yourturn:'review',active:'work',pending:'later',idle:'idle',completed:'done',temporary:'temporary',suggested:'suggested'})){const all=groups[bucket],xs=topicOn&&TOPIC_BUCKETS.includes(bucket)?[]:all,list=$('#list-'+id),head=document.querySelector(`[data-group="${bucket}"]`);list.innerHTML=xs.map(row).join('');list.hidden=xs.length===0;if(head)head.hidden=xs.length===0;count('count-'+id,all.length);count('metric-'+id,all.length)}
@@ -1517,6 +1562,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  else if(a==='skiphooks'){try{localStorage.setItem('hooksSkipped',(data.hooks?.missing||[]).join())}catch(e){}render()}
  else if(a==='link'){const s=data.sessions.find(x=>x.id===id);if(s.linked_from)await post('/api/unlink',{child:id});else{linkChild=id;$('#link-search').value='';linkResults();$('#link-dialog').showModal()}}
  }catch(err){alert(err.message)}});
+document.addEventListener('change',async e=>{const s=e.target.closest?.('select[data-topic-pick]');if(!s)return;let topic=s.value;if(topic==='__new__'){topic=(prompt('New group name:','')||'').trim();if(!topic){s.blur();render();return}}s.blur();try{await post('/api/topic',{id:s.dataset.topicPick,scope:s.dataset.scope,topic})}catch(err){alert(err.message);render()}});
 $('#search').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render()});$('#topic-sections').addEventListener('toggle',e=>{const t=e.target.dataset?.topic;if(t===undefined||query)return;e.target.open?openTopics.add(t):openTopics.delete(t)},true);$('#link-search').addEventListener('input',linkResults);$('#link-cancel').addEventListener('click',()=>$('#link-dialog').close());
 updateNav();tick();setInterval(tick,2000);
 </script></body></html>"""
@@ -1552,7 +1598,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204 if ok else 404)
             self.end_headers()
             return
-        if not self.path.startswith(("/api/flag", "/api/complete", "/api/choice", "/api/link", "/api/unlink", "/api/link-reject", "/api/group-complete", "/api/install-hooks")):
+        if not self.path.startswith(("/api/flag", "/api/complete", "/api/choice", "/api/link", "/api/unlink", "/api/link-reject", "/api/group-complete", "/api/install-hooks", "/api/topic")):
             self.send_error(404)
             return
         try:
@@ -1563,6 +1609,8 @@ class Handler(BaseHTTPRequestHandler):
                 save_completed(str(d["id"]), bool(d.get("on")))
             elif self.path.startswith("/api/choice"):
                 save_choice(str(d["id"]), str(d["choice"]))
+            elif self.path.startswith("/api/topic"):
+                save_topic_choice(str(d["id"]), str(d["scope"]), str(d.get("topic", "")))
             elif self.path.startswith("/api/group-complete"):
                 ws.complete(str(d["id"]), bool(d.get("on")))
             elif self.path.startswith("/api/install-hooks"):

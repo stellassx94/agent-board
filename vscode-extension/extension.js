@@ -119,6 +119,8 @@ class Provider {
             leadId: w.lead_id,
             title: w.title,
             topic: w.topic,
+            autoTopic: w.auto_topic,
+            topicPinned: !!w.topic_pinned,
             bucket: w.bucket,
             activity: w.activity,
             flag: w.flag,
@@ -128,11 +130,24 @@ class Provider {
             codexOnly: (w.roots || []).length > 0 && w.roots.every((r) => r === "codex"),
           };
         })
-      : this.data.sessions.map((s) => ({ ...s, leadId: s.id, count: 1, codexOnly: s.root === "codex" }));
+      : this.data.sessions.map((s) => ({ ...s, leadId: s.id, autoTopic: s.auto_topic, topicPinned: !!s.topic_pinned, count: 1, codexOnly: s.root === "codex" }));
     const prefixes = vscode.workspace.getConfiguration("agentBoard").get("ticketPrefixes", []).map((p) => String(p).toUpperCase());
     return rows
       .map((s) => ({ ...s, topic: s.topic || null, tickets: tickets(s, prefixes) }))
       .filter((s) => !f || ((s.title || "") + " " + s.tickets.join(" ")).toLowerCase().includes(f));
+  }
+
+  // Show a group move at once; the next refresh confirms it from the service.
+  move(items, topic) {
+    if (!this.data) return;
+    const ids = new Set(items.map((it) => it.workstreamId || it.sessionId));
+    for (const x of [...(this.data.workstreams || []), ...this.data.sessions]) {
+      if (!ids.has(x.id) && !(x.workstream_id && ids.has(x.workstream_id))) continue;
+      x.topic = topic || x.auto_topic || null;
+      x.topic_pinned = !!topic;
+    }
+    if (topic && !this.topics().includes(topic)) this.data.topics = [...this.topics(), topic];
+    this._emitter.fire();
   }
 
   // Topics come from the board service, so the app and this list agree.
@@ -180,6 +195,10 @@ class Provider {
     item.leadId = s.leadId;
     item.workstreamId = s.workstreamId;
     item.leadDone = !!s.completed;
+    item.topic = s.topic;
+    item.bucket = s.bucket;
+    item.autoTopic = s.autoTopic;
+    item.topicPinned = s.topicPinned;
     item.contextValue = `session;done=${s.completed ? 1 : 0};cont=${s.choice === "continue" ? 1 : 0}`;
     item.description =
       (showStatus ? g.label + " · " : "") +
@@ -411,7 +430,37 @@ function stopStaleService(running) {
 
 function activate(context) {
   const provider = new Provider();
-  const view = vscode.window.createTreeView("agentBoard.sessions", { treeDataProvider: provider });
+  async function saveTopic(items, topic) {
+    provider.move(items, topic);
+    try {
+      for (const it of items)
+        await request("POST", "/api/topic", it.workstreamId ? { id: it.workstreamId, scope: "workstream", topic } : { id: it.sessionId, scope: "session", topic });
+    } catch (e) {
+      vscode.window.showErrorMessage("Could not change the group. The board service may need the update with group picking. " + (e.message || e));
+    }
+    await refresh();
+  }
+
+  // Drag rows onto a group, its Idle fold, or any row already in that group.
+  // Ungrouped hands a row back to keyword matching.
+  const DRAG = "application/vnd.code.tree.agentboard.sessions";
+  const dragAndDropController = {
+    dragMimeTypes: [DRAG],
+    dropMimeTypes: [DRAG],
+    handleDrag(source, dataTransfer) {
+      const rows = source.filter((it) => it.sessionId);
+      if (rows.length) dataTransfer.set(DRAG, new vscode.DataTransferItem(rows));
+    },
+    async handleDrop(target, dataTransfer) {
+      const rows = dataTransfer.get(DRAG)?.value;
+      if (!target || !Array.isArray(rows) || !rows.length || !provider.byTopic()) return;
+      if (!["topic", "ungrouped", "topicIdle"].includes(target.contextValue) && !(target.sessionId && ![...TOPIC_TOP, ...TOPIC_BOTTOM].includes(target.bucket))) return;
+      const topic = target.contextValue === "ungrouped" ? "" : target.topic || "";
+      const moving = rows.filter((it) => (it.topic || "") !== topic || (!topic && it.topicPinned));
+      if (moving.length) await saveTopic(moving, topic);
+    },
+  };
+  const view = vscode.window.createTreeView("agentBoard.sessions", { treeDataProvider: provider, dragAndDropController, canSelectMany: true });
   context.subscriptions.push(view);
   const overview = new Overview(provider);
   context.subscriptions.push(
@@ -480,6 +529,24 @@ function activate(context) {
           "Could not start a handoff session. The board service may need the update with Handoff to new session. " + (e.message || e)
         );
       }
+    }),
+    // A hand-picked group wins over keyword matching; Auto hands it back.
+    vscode.commands.registerCommand("agentBoard.setTopic", async (item) => {
+      if (!item || !item.sessionId) return;
+      const current = item.topicPinned ? item.topic : "";
+      const picks = [
+        { label: "Auto", description: item.autoTopic || "No topic", topic: "" },
+        ...provider.topics().map((t) => ({ label: t, topic: t })),
+        { label: "$(add) New group…", topic: null },
+      ].map((p) => ({ ...p, picked: p.topic === current, detail: p.topic === current ? "Current" : undefined }));
+      const choice = await vscode.window.showQuickPick(picks, { placeHolder: `Move "${item.label}" to a group` });
+      if (!choice) return;
+      let topic = choice.topic;
+      if (topic === null) {
+        topic = ((await vscode.window.showInputBox({ prompt: "New group name", validateInput: (v) => (v.trim().length > 80 ? "80 characters max" : null) })) || "").trim();
+        if (!topic) return;
+      }
+      await saveTopic([item], topic);
     }),
     vscode.commands.registerCommand("agentBoard.openBoard", () =>
       vscode.env.openExternal(vscode.Uri.parse(`http://127.0.0.1:${cfg().port}/`))

@@ -38,6 +38,7 @@ STATE_NAMES = {
     "agent_board_choices.json", "agent_board_flags.json",
     "agent_board_suggestions.json", "agent_board_lineage.json",
     "agent_board_prompts.json", "agent_board_topics.json",
+    "agent_board_topic_choices.json",
 }
 
 

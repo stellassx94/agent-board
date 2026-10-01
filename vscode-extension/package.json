@@ -2,7 +2,7 @@
 	"name": "agent-board-sidebar",
 	"displayName": "Agent Board Sidebar",
 	"description": "Compact sidebar list of your Claude Code and Codex sessions, fed by the local Agent Board.",
-	"version": "0.4.23",
+	"version": "0.4.24",
 	"icon": "media/logo.png",
 	"publisher": "stella-simsx",
 	"private": true,
@@ -100,6 +100,11 @@
 			{
 				"command": "agentBoard.pick",
 				"title": "Pick a session by status"
+			},
+			{
+				"command": "agentBoard.setTopic",
+				"title": "Move to group…",
+				"icon": "$(tag)"
 			}
 		],
 		"menus": {
@@ -158,6 +163,10 @@
 				{
 					"command": "agentBoard.pick",
 					"when": "false"
+				},
+				{
+					"command": "agentBoard.setTopic",
+					"when": "false"
 				}
 			],
 			"view/item/context": [
@@ -210,6 +219,16 @@
 					"command": "agentBoard.undoDone",
 					"when": "view == agentBoard.sessions && viewItem =~ /done=1/",
 					"group": "1_actions@2"
+				},
+				{
+					"command": "agentBoard.setTopic",
+					"when": "view == agentBoard.sessions && viewItem =~ /^session/",
+					"group": "inline@3"
+				},
+				{
+					"command": "agentBoard.setTopic",
+					"when": "view == agentBoard.sessions && viewItem =~ /^session/",
+					"group": "1_actions@3"
 				}
 			]
 		},

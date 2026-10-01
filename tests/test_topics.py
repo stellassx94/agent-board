@@ -38,6 +38,24 @@ class TopicTests(unittest.TestCase):
         with mock.patch.object(ab, "TOPICS_FILE", Path("/nonexistent/topics.json")):
             self.assertEqual(ab.load_topics(), ([], []))
 
+    def test_hand_picked_group_is_saved_per_scope_and_cleared(self):
+        sid = "12345678-1234-1234-1234-123456789abc"
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "topic_choices.json"
+            with mock.patch.object(ab, "DATA_DIR", Path(d)), mock.patch.object(ab, "TOPIC_CHOICES_FILE", f):
+                self.assertEqual(ab.load_topic_choices(), {"session": {}, "workstream": {}})
+                ab.save_topic_choice(sid, "session", "  AI Tools  &  Automation ")
+                ab.save_topic_choice(sid, "workstream", "Parcel Library")
+                self.assertEqual(ab.load_topic_choices(), {"session": {sid: "AI Tools & Automation"},
+                                                           "workstream": {sid: "Parcel Library"}})
+                ab.save_topic_choice(sid, "session", "")
+                self.assertEqual(ab.load_topic_choices()["session"], {})
+                for bad in (("not-an-id", "session", "A"), (sid, "everything", "A"), (sid, "session", "x" * 81)):
+                    with self.assertRaises(ValueError):
+                        ab.save_topic_choice(*bad)
+                f.write_text("not json")
+                self.assertEqual(ab.load_topic_choices(), {"session": {}, "workstream": {}})
+
 
 if __name__ == "__main__":
     unittest.main()
