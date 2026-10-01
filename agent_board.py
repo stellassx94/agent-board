@@ -64,6 +64,7 @@ STUCK_MIN = 15          # a tool running longer than this is flagged
 QUIET_MIN = 5           # no log writes for this long while "thinking" is flagged
 ABANDONED_MIN = 120     # quiet longer than this and not finished = abandoned, not stuck
 YOUR_TURN_HOURS = 3    # finished within this window = "your turn", older = idle
+UNATTENDED_DONE_MIN = 5  # a script-started session that finished cleanly completes itself after this
 SUGGESTION_REVIEW_HOURS = 72  # unreviewed completion and temporary suggestions expire
 COMMON_TOKENS = {"run_query.py", "scripts/run_query.py", ".presto_creds.env", "presto_creds.env",
                  "shell-snapshots", "NO_EXTENDED_GLOB", "NO_BARE_GLOB_QUAL", "/dev/null"}
@@ -209,6 +210,7 @@ def parse_session(path):
     pending = {}
     bg = {}  # background jobs started by this session, keyed by tool_use id
     last_kind, last_ts, last_text, last_prompt, cwd = None, None, "", None, None
+    failed = False
     last_user, last_user_ts = "", None
     for raw in lines:
         if not raw.strip():
@@ -272,6 +274,7 @@ def parse_session(path):
                     last_text = b["text"]
             last_kind = "tool" if pending else ("done" if assistant_turn_finished(d, msg) else "thinking")
             last_ts = when
+            failed = bool(d.get("isApiErrorMessage") or d.get("error"))
 
     info = {
         "id": path.stem,
@@ -280,6 +283,7 @@ def parse_session(path):
         "root": path.parent.parent.parent.name,
         "cwd": start_cwd or cwd,
         "entrypoint": entrypoint,
+        "failed": failed,
         "last_kind": last_kind,
         "last_ts": last_ts,
         "last_user": last_user,
@@ -1166,6 +1170,14 @@ def completion_active(row, marker):
     return row["activity"] <= marker.get("at", 0)
 
 
+def unattended_done(row, marker, now):
+    """A script-started session cannot take a reply, so a clean finish closes itself."""
+    scripted = row.get("entrypoint") == "sdk-cli" or row.get("originator") == "codex_exec"
+    return (scripted and row["last_kind"] == "done" and not row.get("failed")
+            and row["state"] in ("yourturn", "idle") and (marker or {}).get("source") != "board-undone"
+            and now - row["activity"] >= UNATTENDED_DONE_MIN * 60)
+
+
 def recover_suggestion(session, path, now, completed):
     """Cover a missed Stop hook for a recently finished turn."""
     finished_at = session.get("last_ts")
@@ -1284,6 +1296,8 @@ def status(hours):
         marker = completed.get(r["id"])
         r["completed"] = completion_active(r, marker)
         r["completion_source"] = marker.get("source") if r["completed"] else None
+        if not r["completed"] and unattended_done(r, marker, now):
+            r["completed"], r["completion_source"] = True, "unattended"
         choice = choices.get(r["id"])
         r["choice"] = (choice.get("state") if choice and
                        (choice.get("state") == "continue" or r["activity"] <= choice.get("at", 0)) else None)
@@ -1454,7 +1468,7 @@ function detail(x){if(!x)return '<div class="empty">Select a workstream to see i
  const status=b==='yourturn'&&x.needs_completion?'Your turn':LABEL[b]||'Idle';
  const context=b==='asking'?'The agent is asking a question or permission. Open the latest session to respond.':b==='check'?'The session may need intervention. Open it to verify what is happening.':b==='yourturn'?'The agent replied. Review the result and decide the next step.':b==='idle'?'There is no recent activity. Idle does not mean complete.':detailOf(x);
  const completionConfirmed=x.completed||(isGroup&&l?.completed),completionSource=x.completed?x.completion_source:l?.completion_source,completionText=!completionConfirmed?'Not confirmed':completionSource==='chat-parked'?'Session done · starred for later':completionSource==='chat-closeout'?'Confirmed from chat':'Confirmed by you';
- return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'green',active:'blue',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${action('resumenew',last?.id||x.id,'Resume in new chat ↻')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${action('resumenew',s.id,'Resume new ↻')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
+ return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'green',active:'blue',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${action('resumenew',last?.id||x.id,'Handoff to new session')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${action('resumenew',s.id,'Handoff')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
 function renderTopicSections(items){const names=data.topics||[],box=$('#topic-sections');topicOn=groupBy==='topic'&&names.length>0;$('#group-switch').hidden=!names.length;$('#group-status').setAttribute('aria-pressed',String(!topicOn));$('#group-topic').setAttribute('aria-pressed',String(topicOn));box.hidden=!topicOn;$('#later').hidden=topicOn;if(!topicOn){box.innerHTML='';return}
  const rows=items.filter(x=>TOPIC_BUCKETS.includes(x.bucket));
  box.innerHTML=[...names,''].map(name=>{const xs=rows.filter(x=>(x.topic||'')===name);if(!xs.length)return '';

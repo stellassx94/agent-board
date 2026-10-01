@@ -2,7 +2,7 @@
 	"name": "agent-board-sidebar",
 	"displayName": "Agent Board Sidebar",
 	"description": "Compact sidebar list of your Claude Code and Codex sessions, fed by the local Agent Board.",
-	"version": "0.4.22",
+	"version": "0.4.23",
 	"icon": "media/logo.png",
 	"publisher": "stella-simsx",
 	"private": true,
@@ -54,8 +54,8 @@
 			},
 			{
 				"command": "agentBoard.resumeNew",
-				"title": "Resume in new chat",
-				"icon": "$(debug-restart)"
+				"title": "Handoff to new session",
+				"icon": "$(export)"
 			},
 			{
 				"command": "agentBoard.openBoard",

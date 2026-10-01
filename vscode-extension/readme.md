@@ -4,7 +4,7 @@ Compact VS Code sidebar list of Claude Code and Codex sessions, read from the lo
 
 - Each row is one workstream, the same as the board's Workstreams view, so a resumed chat joins its original row and the counts match the app. A row with linked chats shows `N chats`.
 - Click a row to open its latest chat.
-- The ↻ icon, or right-click **Resume in new chat**, starts a fresh chat in the session's own app with a resume-skill prompt (Agent Board v0.4.13 or later).
+- The handoff icon, or right-click **Handoff to new session**, starts a fresh chat in the session's own app with a resume-skill prompt (Agent Board v0.4.13 or later).
 - Inline and right-click actions mark a workstream done or save it for Continue later.
 - The list-tree icon switches between grouping by status and grouping by topic. Topics come from the board service (`agent_board_topics.json` in the Agent Board data folder), so the app and the sidebar agree. The topic view keeps Asking you, Check me, Working and Your turn at the top, files the other live rows under their topic with idle rows folded into one **Idle** node, and leaves Temporary and Completed at the bottom.
 - Rows show the ticket keys they mention, such as `ABC-1234`, and search matches them. `agentBoard.ticketPrefixes` limits which prefixes count.

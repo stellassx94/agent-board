@@ -473,11 +473,11 @@ function activate(context) {
       try {
         const res = JSON.parse(await request("POST", "/api/resume-new?id=" + encodeURIComponent(item.sessionId)));
         if (res.mode === "copied") {
-          vscode.window.showInformationMessage("Resume prompt copied. Paste it into the new Codex chat.");
+          vscode.window.showInformationMessage("Handoff prompt copied. Paste it into the new Codex chat.");
         }
       } catch (e) {
         vscode.window.showErrorMessage(
-          "Could not start a resume chat. The board service may need the update with Resume in new chat. " + (e.message || e)
+          "Could not start a handoff session. The board service may need the update with Handoff to new session. " + (e.message || e)
         );
       }
     }),

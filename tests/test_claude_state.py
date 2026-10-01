@@ -236,6 +236,30 @@ class ClaudeStateTests(unittest.TestCase):
         self.assertEqual([["open", "-a", "Visual Studio Code", cwd],
                           ["open", f"vscode://anthropic.claude-code/open?session={sid}"]], calls)
 
+    def test_script_started_session_completes_itself_after_five_minutes(self):
+        now = 2_000_000_000
+        text = [{"type": "text", "text": "Minutes saved."}]
+        self.write([user("Write the minutes", now - 400),
+                    assistant(text, now - 360, "end_turn")], mtime=now - 360)
+        row = {**board.parse_session(self.path), "entrypoint": "sdk-cli", "state": "yourturn"}
+        self.assertTrue(board.unattended_done(row, None, now))
+        self.assertFalse(board.unattended_done(row, None, now - 120))
+        self.assertFalse(board.unattended_done(row, {"source": "board-undone"}, now))
+        self.assertFalse(board.unattended_done({**row, "entrypoint": "claude-vscode"}, None, now))
+        codex = {"root": "codex", "originator": "codex_exec", "last_kind": "done", "state": "yourturn",
+                 "activity": now - 360}
+        self.assertTrue(board.unattended_done(codex, None, now))
+        self.assertFalse(board.unattended_done({**codex, "originator": "codex_vscode"}, None, now))
+
+    def test_failed_script_started_session_stays_in_your_turn(self):
+        now = 2_000_000_000
+        text = [{"type": "text", "text": "API Error: Unable to connect to API"}]
+        self.write([user("Write the minutes", now - 400),
+                    assistant(text, now - 360, "stop_sequence", isApiErrorMessage=True)], mtime=now - 360)
+        row = {**board.parse_session(self.path), "entrypoint": "sdk-cli", "state": "yourturn"}
+        self.assertTrue(row["failed"])
+        self.assertFalse(board.unattended_done(row, None, now))
+
 
 if __name__ == "__main__":
     unittest.main()
