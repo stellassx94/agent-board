@@ -173,7 +173,9 @@ def make_workstreams(rows, data, flags=None):
         else:
             bucket = lead["bucket"]
         original = by_id.get(root)
-        title = (original or next((r for r in reversed(members) if "resume" not in r["title"].lower()), newest))["title"]
+        # A /rename on any member, newest first, beats the root's original title.
+        renamed = next((r for r in members if r.get("renamed")), None)
+        title = (renamed or original or next((r for r in reversed(members) if "resume" not in r["title"].lower()), newest))["title"]
         result.append({"id": root, "title": title, "bucket": bucket, "activity": newest["activity"],
                        "session_ids": [r["id"] for r in members], "session_count": len(members),
                        "lead_id": lead["id"], "latest_id": newest["id"], "detail": lead["detail"],

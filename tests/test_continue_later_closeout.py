@@ -102,6 +102,17 @@ class ContinueLaterCloseoutTests(unittest.TestCase):
         rows[1]["bucket"] = "idle"
         self.assertEqual("pending", workstreams.make_workstreams([dict(r) for r in rows], data, {root: flag})[0]["bucket"])
 
+    def test_renamed_resume_titles_the_workstream(self):
+        root = "11111111-1111-4111-8111-111111111111"
+        leaf = "22222222-2222-4222-8222-222222222222"
+        rows = [{"id": root, "title": "Old chat", "root": "claude", "activity": 60, "bucket": "idle", "detail": ""},
+                {"id": leaf, "title": "Old chat", "root": "claude", "activity": 100, "bucket": "yourturn", "detail": ""}]
+        data = {"links": {leaf: {"parent": root, "source": "resume"}}, "rejected": {}, "completed": {}}
+        self.assertEqual("Old chat", workstreams.make_workstreams([dict(r) for r in rows], data)[0]["title"])
+        rows[1].update(title="PL PRD split parcel checkout validation", renamed=True)
+        self.assertEqual("PL PRD split parcel checkout validation",
+                         workstreams.make_workstreams([dict(r) for r in rows], data)[0]["title"])
+
 
 if __name__ == "__main__":
     unittest.main()

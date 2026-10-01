@@ -632,8 +632,8 @@ def claude_app_titles():
     return titles
 
 
-def claude_display_title(path, parsed_title, app_titles):
-    """Prefer Claude's saved custom title, then its app title."""
+def claude_custom_title(path):
+    """The title set with /rename, if any."""
     try:
         data = json.loads((path.with_suffix("") / "custom-title.json").read_text())
         custom = data.get("customTitle")
@@ -641,7 +641,12 @@ def claude_display_title(path, parsed_title, app_titles):
             return short(custom, 80)
     except (OSError, ValueError):
         pass
-    return short(app_titles.get(path.stem) or parsed_title, 80)
+    return None
+
+
+def claude_display_title(path, parsed_title, app_titles):
+    """Prefer Claude's saved custom title, then its app title."""
+    return claude_custom_title(path) or short(app_titles.get(path.stem) or parsed_title, 80)
 
 
 RESUME_TITLE_RE = re.compile(r"(?i)^\s*(?:/?resume|use the resume skill|continue: (?P<name>.+?) — use the resume skill)"
@@ -1284,6 +1289,7 @@ def status(hours):
                     continue
                 s = dict(parse_session(p))
                 s["title"] = claude_display_title(p, s["title"], app_titles)
+                s["renamed"] = claude_custom_title(p) is not None
             except Exception:
                 continue
             state, detail = classify(s, now, ps_lines, prompts.get(s["id"]))
