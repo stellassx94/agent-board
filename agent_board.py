@@ -1573,6 +1573,33 @@ $('#search').addEventListener('input',e=>{query=e.target.value.trim().toLowerCas
 updateNav();tick();setInterval(tick,2000);
 </script></body></html>"""
 
+_status_lock = threading.Lock()
+_status_cache = {}
+STATUS_TTL = 3.0
+
+
+def cached_status(hours):
+    with _status_lock:
+        hit = _status_cache.get(hours)
+        if hit and time.monotonic() - hit[0] < STATUS_TTL:
+            return hit[1]
+        body = json.dumps(status(hours)).encode()
+        _status_cache[hours] = (time.monotonic(), body)
+        return body
+
+
+def invalidate_status():
+    with _status_lock:
+        _status_cache.clear()
+
+
+class QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     hours = 168
 
@@ -1635,6 +1662,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.send_error(400)
             return
+        invalidate_status()
         self.send_response(204)
         self.end_headers()
 
@@ -1642,7 +1670,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_request():
             return
         if self.path.startswith("/api/status"):
-            body = json.dumps(status(self.hours)).encode()
+            body = cached_status(self.hours)
             ctype = "application/json"
         elif self.path == "/custom.css":
             try:
@@ -1685,7 +1713,7 @@ def main():
         print(json.dumps(status(a.hours), indent=1))
         return
     Handler.hours = a.hours
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+    srv = QuietServer(("127.0.0.1", a.port), Handler)
     url = f"http://127.0.0.1:{a.port}/"
     print(f"Agent Board running at {url}  (Ctrl+C to stop)")
     if not a.no_open:
