@@ -27,6 +27,8 @@ Finished replies leave **Your turn** after one hour without activity and become 
 
 In Workstreams view, use **Select to complete** in Needs your attention to select multiple rows. **Select all Your turn** selects the visible finished replies; Check me rows can be selected individually. Completed workstreams remain in Other work and can be undone there.
 
+The visible board polls every five seconds and shares a ten-second service snapshot with other clients; saving a choice invalidates that snapshot immediately. Hidden pages poll every thirty seconds. Unchanged rows keep their existing controls, and closed archive and daily-reply sections load their rows when opened. Title metadata and topic matches are cached, growing transcripts reuse opening metadata, and session caches are bounded.
+
 ## Personal settings
 
 Settings, board choices, and confirmed workstream links live in `~/.agent-board/`, outside the clone. Create that folder and copy `examples/config.example.json` to `~/.agent-board/config.json` to change sources or opening behavior. You may also copy `examples/custom.example.css` to `~/.agent-board/custom.css` to change colors, spacing, and layout. The custom CSS loads after the built-in styles, so your design survives source updates.

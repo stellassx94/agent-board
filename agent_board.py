@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import webbrowser
+from functools import lru_cache
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -73,6 +74,15 @@ COMMON_TOKENS = {"run_query.py", "scripts/run_query.py", ".presto_creds.env", "p
 _cache = {}
 _fallback_cache = {}
 _recent_status = None
+_claude_metadata_cache = {}
+_codex_prompt_cache = {}
+MAX_SESSION_CACHE = 2048
+
+
+def remember_session(path, key, info):
+    if len(_cache) >= MAX_SESSION_CACHE and path not in _cache:
+        _cache.pop(next(iter(_cache)))
+    _cache[path] = (key, info)
 
 
 def ts(s):
@@ -84,7 +94,7 @@ def ts(s):
 
 def ps_snapshot():
     try:
-        out = subprocess.run(["ps", "-axo", "pid,etime,command"], capture_output=True, text=True).stdout
+        out = subprocess.run(["ps", "-axo", "pid,etime,command"], capture_output=True, text=True, timeout=2).stdout
     except Exception:
         return [], 0
     lines = out.splitlines()[1:]
@@ -167,6 +177,69 @@ def assistant_turn_finished(row, message):
     return message.get("stop_reason") in {"end_turn", "stop_sequence", "max_tokens", "refusal"}
 
 
+def transcript_tail(path, size):
+    """Read only the recent conversation window, never the whole transcript."""
+    start = max(0, size - TAIL_BYTES)
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        lines = handle.read(TAIL_BYTES).split(b"\n")
+    return lines[1:] if start else lines
+
+
+def claude_metadata(path, st, with_tail=False):
+    """Keep stable metadata while scanning only newly appended records."""
+    key = (st.st_dev, st.st_ino)
+    previous = _claude_metadata_cache.get(path)
+    if (previous and previous[0] == key and previous[1]["offset"] <= st.st_size
+            and (previous[1]["size"] < st.st_size or previous[1]["stamp"] == st.st_mtime_ns)):
+        info = dict(previous[1])
+    else:
+        info = {"offset": 0, "title": None, "prompt": None, "cwd": None, "entrypoint": None}
+    offset = info["offset"]
+    with open(path, "rb") as handle:
+        handle.seek(info["offset"])
+        data = handle.read(max(0, st.st_size - info["offset"]))
+    lines = None
+    if with_tail and offset <= max(0, st.st_size - TAIL_BYTES):
+        lines = data[-TAIL_BYTES:].split(b"\n")
+        if st.st_size > TAIL_BYTES:
+            lines = lines[1:]
+    end = data.rfind(b"\n") + 1
+    if data and not data.endswith(b"\n"):
+        try:
+            json.loads(data[end:])
+            end = len(data)
+        except (ValueError, UnicodeDecodeError):
+            pass
+    data = data[:end]
+    if info["prompt"] is None:
+        prompt = first_claude_prompt(data)
+        if prompt:
+            info["prompt"] = short(prompt, 80)
+    if info["cwd"] is None:
+        match = re.search(rb'"cwd":"((?:[^"\\]|\\.)*)"', data)
+        if match:
+            info["cwd"] = json.loads(b'"' + match.group(1) + b'"')
+    if info["entrypoint"] is None:
+        match = re.search(rb'"entrypoint":"([A-Za-z0-9_-]{1,40})"', data)
+        if match:
+            info["entrypoint"] = match.group(1).decode()
+    index = data.rfind(b'"aiTitle":"')
+    if index >= 0:
+        try:
+            line_end = data.find(b"\n", index)
+            raw = data[data.rfind(b"\n", 0, index) + 1:line_end if line_end >= 0 else len(data)]
+            info["title"] = json.loads(raw).get("aiTitle") or info["title"]
+        except (ValueError, UnicodeDecodeError):
+            pass
+    info["offset"] += end
+    if len(_claude_metadata_cache) >= 2048 and path not in _claude_metadata_cache:
+        _claude_metadata_cache.pop(next(iter(_claude_metadata_cache)))
+    info.update(size=st.st_size, stamp=st.st_mtime_ns)
+    _claude_metadata_cache[path] = (key, info)
+    return (info, lines if lines is not None else transcript_tail(path, st.st_size)) if with_tail else info
+
+
 def parse_session(path):
     st = path.stat()
     sub = path.with_suffix("")  # sibling folder with subagent logs
@@ -179,7 +252,7 @@ def parse_session(path):
                 act = max(act, sub_act)
             except OSError:
                 pass
-    key = (st.st_mtime, st.st_size)
+    key = (st.st_ino, st.st_mtime_ns, st.st_size)
     hit = _cache.get(path)
     if hit and hit[0] == key:
         info = dict(hit[1])
@@ -189,24 +262,9 @@ def parse_session(path):
         info["sub_activity"] = sub_act
         return info
 
-    with open(path, "rb") as f:
-        data = f.read()
-    title = None
-    first_prompt = first_claude_prompt(data)
-    i = data.rfind(b'"aiTitle":"')
-    if i >= 0:
-        try:
-            title = json.loads(data[data.rfind(b"\n", 0, i) + 1: data.find(b"\n", i)])["aiTitle"]
-        except Exception:
-            pass
-    m = re.search(rb'"cwd":"((?:[^"\\]|\\.)*)"', data)
-    start_cwd = json.loads(b'"' + m.group(1) + b'"') if m else None
-    m = re.search(rb'"entrypoint":"([A-Za-z0-9_-]{1,40})"', data)
-    entrypoint = m.group(1).decode() if m else None
-    tail = data[-TAIL_BYTES:]
-    lines = tail.split(b"\n")
-    if len(data) > TAIL_BYTES:
-        lines = lines[1:]
+    metadata, lines = claude_metadata(path, st, with_tail=True)
+    title, first_prompt = metadata["title"], metadata["prompt"]
+    start_cwd, entrypoint = metadata["cwd"], metadata["entrypoint"]
 
     pending = {}
     bg = {}  # background jobs started by this session, keyed by tool_use id
@@ -298,7 +356,7 @@ def parse_session(path):
         "bg": [{"name": n, "label": tool_label(n, i), "cmd": (i or {}).get("command", ""), "ts": w}
                for n, i, w in bg.values()],
     }
-    _cache[path] = (key, info)
+    remember_session(path, key, info)
     return info
 
 
@@ -375,7 +433,7 @@ def classify(s, now, ps_lines, prompt=None):
 
 def ps_tree():
     try:
-        out = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,etime=,command="], capture_output=True, text=True).stdout
+        out = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,etime=,command="], capture_output=True, text=True, timeout=2).stdout
     except Exception:
         return []
     rows = []
@@ -522,25 +580,41 @@ def codex_escalated_call(name, args):
     return False
 
 
+def codex_opening_prompt(path, st):
+    key = (st.st_dev, st.st_ino)
+    hit = _codex_prompt_cache.get(path)
+    if (hit and hit[0] == key and hit[1] <= st.st_size and hit[2]
+            and (hit[1] < st.st_size or hit[3] == st.st_mtime_ns)):
+        return hit[2]
+    prompt = None
+    with open(path, "rb") as handle:
+        for raw in handle:
+            prompt = codex_first_user_message(raw)
+            if prompt:
+                prompt = short(prompt, 80)
+                break
+    if len(_codex_prompt_cache) >= 2048 and path not in _codex_prompt_cache:
+        _codex_prompt_cache.pop(next(iter(_codex_prompt_cache)))
+    _codex_prompt_cache[path] = (key, st.st_size, prompt, st.st_mtime_ns)
+    return prompt
+
+
 def parse_codex(path):
     st = path.stat()
-    key = (st.st_mtime, st.st_size)
+    key = (st.st_ino, st.st_mtime_ns, st.st_size)
     hit = _cache.get(path)
     if hit and hit[0] == key:
         return hit[1]
     with open(path, "rb") as f:
-        data = f.read()
-    lines = data[-TAIL_BYTES:].split(b"\n")
-    if len(data) > TAIL_BYTES:
-        lines = lines[1:]
+        head = f.readline()
+    lines = transcript_tail(path, st.st_size)
     sid, cwd, first_msg, originator = path.stem[-36:], None, None, None
-    head = data[: data.find(b"\n")] if b"\n" in data else data
     try:
         meta = json.loads(head)["payload"]
         sid, cwd = meta.get("id", sid), meta.get("cwd")
         originator = meta.get("originator")
         if meta.get("parent_thread_id"):  # helper/subagent thread, not a user session
-            _cache[path] = (key, None)
+            remember_session(path, key, None)
             return None
     except Exception:
         pass
@@ -592,7 +666,7 @@ def parse_codex(path):
                     awaiting_question = ("request_user_input_async", "Awaiting your answer", when)
             if last_kind != "done":
                 last_kind, last_ts = ("tool" if pending else "thinking"), when
-    first_msg = codex_first_user_message(data) or first_msg
+    first_msg = codex_opening_prompt(path, st) or first_msg
     pending_items = list(pending.values())
     if awaiting_question and not any(n == "request_user_input_async" for n, _, _ in pending_items):
         pending_items.append(awaiting_question)
@@ -612,11 +686,25 @@ def parse_codex(path):
         "pending": [{"name": n, "label": lbl, "cmd": "", "ts": w} for n, lbl, w in pending_items],
         "activity": last_ts if last_kind == "done" and last_ts else st.st_mtime,
     }
-    _cache[path] = (key, info)
+    remember_session(path, key, info)
     return info
 
 
 CLAUDE_APP_SESSIONS = Path.home() / "Library/Application Support/Claude/claude-code-sessions"
+
+
+@lru_cache(maxsize=2048)
+def cached_sidecar_json(path, stamp):
+    raw = json.loads(path.read_text())
+    if not isinstance(raw, dict):
+        return {}
+    # Desktop sidecars also contain conversation data; retain only title metadata.
+    return {key: raw.get(key) for key in ("cliSessionId", "title", "customTitle")}
+
+
+def sidecar_json(path):
+    st = path.stat()
+    return cached_sidecar_json(path, (st.st_ino, st.st_mtime_ns, st.st_size))
 
 
 def claude_app_titles():
@@ -624,7 +712,7 @@ def claude_app_titles():
     titles = {}
     for path in CLAUDE_APP_SESSIONS.glob("*/*/local_*.json"):
         try:
-            data = json.loads(path.read_text())
+            data = sidecar_json(path)
         except (OSError, ValueError):
             continue
         sid, title = data.get("cliSessionId"), data.get("title")
@@ -636,7 +724,7 @@ def claude_app_titles():
 def claude_custom_title(path):
     """The title set with /rename, if any."""
     try:
-        data = json.loads((path.with_suffix("") / "custom-title.json").read_text())
+        data = sidecar_json(path.with_suffix("") / "custom-title.json")
         custom = data.get("customTitle")
         if isinstance(custom, str) and custom.strip():
             return short(custom, 80)
@@ -889,6 +977,12 @@ def load_topics():
 
 
 def topic_for(title, cwd, topics, folders):
+    """Cache matching until the title, folder, or rules change."""
+    return cached_topic_for(title, cwd, tuple((label, tuple(words)) for label, words in topics), tuple(folders))
+
+
+@lru_cache(maxsize=4096)
+def cached_topic_for(title, cwd, topics, folders):
     """The topic whose keywords hit the title most; the first wins a tie. Then the folder."""
     text = (title or "").lower()
     best, best_hits = None, 0
@@ -1227,6 +1321,8 @@ def recover_suggestion(session, path, now, completed):
         return None
     key = (session["id"], finished_at)
     if key not in _fallback_cache:
+        if len(_fallback_cache) >= 4096:
+            _fallback_cache.pop(next(iter(_fallback_cache)))
         state, reason = turn_classifier.classify({
             "last_assistant_message": session["last_reply"],
             "transcript_path": str(path),
@@ -1247,7 +1343,16 @@ def recover_suggestion(session, path, now, completed):
     return _fallback_cache[key]
 
 
+_refresh_lock = threading.Lock()
+
+
 def status(hours):
+    """Only one refresh may update the shared parser and suggestion caches."""
+    with _refresh_lock:
+        return _build_status(hours)
+
+
+def _build_status(hours):
     global _recent_status
     now = time.time()
     ps_lines, n_claude = ps_snapshot()
@@ -1473,6 +1578,8 @@ const nativeUpdater=window.webkit?.messageHandlers?.agentBoardUpdates;
 if(nativeUpdater){const b=$('#releases');b.textContent='Check for updates…';b.title='Check the latest published release'}
 function updateNav(){const toggle=$('#nav-toggle');$('#app').classList.toggle('nav-expanded',navExpanded);toggle.setAttribute('aria-expanded',String(navExpanded));toggle.setAttribute('aria-label',navExpanded?'Collapse sidebar':'Expand sidebar');toggle.title=navExpanded?'Collapse sidebar':'Expand sidebar';toggle.textContent=navExpanded?'‹':'›'}
 const escapeHTML=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const htmlCache=new WeakMap();
+const setHTML=(el,html)=>{if(el&&htmlCache.get(el)!==html){el.innerHTML=html;htmlCache.set(el,html)}};
 const plain=s=>String(s??'').replace(/\*\*|`/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1');
 const ago=m=>m<1?'just now':m<60?`${Math.round(m)} min ago`:m<1440?`${(m/60).toFixed(1)} h ago`:`${Math.round(m/1440)} d ago`;
 const accountName=r=>r==='codex'?'Codex':'Claude';
@@ -1486,7 +1593,7 @@ const activityOf=x=>view==='workstreams'?ago((data.now-x.activity)/60):ago(x.qui
 const bucketOf=x=>x.bucket;
 const rootsOf=x=>view==='workstreams'?rootNames(x):accountName(x.root)+(x.continued?' · continued':'');
 const visible=x=>(account==='all'||(view==='workstreams'?x.roots.some(r=>(r==='codex'?'codex':'claude')===account):(x.root==='codex'?'codex':'claude')===account))&&(!query||`${x.title} ${x.detail} ${x.project||''} ${rootsOf(x)}`.toLowerCase().includes(query));
-function renderToday(){const today=new Date().toDateString();const xs=data.sessions.filter(s=>(account==='all'||(s.root==='codex'?'codex':'claude')===account)&&['yourturn','idle'].includes(s.state)&&s.last_kind==='done'&&s.last_ts&&new Date(s.last_ts*1000).toDateString()===today).sort((a,b)=>b.last_ts-a.last_ts);count('count-today',xs.length);$('#today-list').innerHTML=xs.length?xs.map(s=>`<div class="session-line"><span>${escapeHTML(s.title)} · ${escapeHTML(accountName(s.root))} · ${new Date(s.last_ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span><button type="button" class="action" data-action="open" data-id="${escapeHTML(s.id)}">Open ↗</button></div>`).join(''):'<div class="empty">No agent replies yet today.</div>'}
+function renderToday(){const today=new Date().toDateString();const xs=data.sessions.filter(s=>(account==='all'||(s.root==='codex'?'codex':'claude')===account)&&['yourturn','idle'].includes(s.state)&&s.last_kind==='done'&&s.last_ts&&new Date(s.last_ts*1000).toDateString()===today).sort((a,b)=>b.last_ts-a.last_ts);count('count-today',xs.length);if(!$('#today').open){setHTML($('#today-list'),'');return}setHTML($('#today-list'),xs.length?xs.map(s=>`<div class="session-line"><span>${escapeHTML(s.title)} · ${escapeHTML(accountName(s.root))} · ${new Date(s.last_ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span><button type="button" class="action" data-action="open" data-id="${escapeHTML(s.id)}">Open ↗</button></div>`).join(''):'<div class="empty">No agent replies yet today.</div>')}
 const count=(id,n)=>{const el=$('#'+id);if(el){el.textContent=n;if(el.classList.contains('number'))el.hidden=n===0}};
 function row(x){const b=bucketOf(x),tone=TONE[b]||'idle';return `<button type="button" class="work-row ${tone}${selected===x.id?' selected':''}" data-select="${escapeHTML(x.id)}" aria-pressed="${selected===x.id}"><span class="row-marker"></span><span class="row-copy"><strong>${escapeHTML(titleOf(x))}</strong><small>${escapeHTML(detailOf(x))}</small></span><span class="row-end">${x.topic?`<span class="topic-tag">${escapeHTML(x.topic)}</span>`:''}<span class="agent">${escapeHTML(rootsOf(x))}</span>${escapeHTML(activityOf(x))}<span class="arrow">›</span></span></button>`}
 function suggestion(s){if(!s?.suggestion||s.choice==='dismiss')return '';return `<div class="suggestion"><strong>Suggested: ${escapeHTML(SUGGEST[s.suggestion.state]||'Uncertain')}</strong>${escapeHTML(s.suggestion.reason)}<br>Review the session before choosing a state.</div>`}
@@ -1514,7 +1621,7 @@ document.addEventListener('pointerout',e=>{if(tooltipTarget&&!tooltipTarget.cont
 document.addEventListener('focusin',e=>{const target=e.target.closest?.('[data-tooltip]');if(target)showActionTooltip(target)});
 document.addEventListener('focusout',e=>{if(tooltipTarget&&!tooltipTarget.contains(e.relatedTarget))hideActionTooltip()});
 document.addEventListener('scroll',hideActionTooltip,true);window.addEventListener('resize',hideActionTooltip);
-function foldSection(id,n){const section=$('#'+id);if(section.dataset.count!==String(n)){section.open=n>0;section.dataset.count=String(n)}}
+function foldSection(id,n){const section=$('#'+id),previous=section.dataset.count;if(n===0)section.open=false;else if((previous===undefined||previous==='0')&&id!=='archive')section.open=true;section.dataset.count=String(n)}
 function detail(x){if(!x)return '<div class="empty">Select a workstream to see its details.</div>';const b=bucketOf(x),isGroup=view==='workstreams',l=isGroup?lead(x):x,last=isGroup?latest(x):x,n=isGroup?x.session_count:1;
  const status=b==='yourturn'&&x.needs_completion?'Your turn':LABEL[b]||'Idle';
  const context=b==='asking'?'The agent is asking a question or permission. Open the latest session to respond.':b==='check'?'The session may need intervention. Open it to verify what is happening.':b==='yourturn'?'The agent replied. Review the result and decide the next step.':b==='idle'?'There is no recent activity. Idle does not mean complete.':detailOf(x);
@@ -1522,25 +1629,25 @@ function detail(x){if(!x)return '<div class="empty">Select a workstream to see i
  return `<div class="detail-body"><div class="detail-status" style="--tone:var(--${{asking:'amber',check:'red',yourturn:'green',active:'blue',pending:'purple',idle:'grey',completed:'green',temporary:'purple',suggested:'purple'}[b]||'grey'});color:var(--tone)"><span class="dot"></span>${escapeHTML(status)}</div><h2 class="detail-title">${escapeHTML(titleOf(x))}</h2><p class="detail-summary">${escapeHTML(detailOf(x))}</p><div class="detail-meta"><span>${escapeHTML(rootsOf(x))}</span><span>·</span><span>${n} ${n===1?'session':'sessions'}</span><span>·</span><span>${escapeHTML(activityOf(x))}</span></div>${topicPicker(x,isGroup)}${suggestion(l)}${x.flag_note?`<div class="suggestion">Note: ${escapeHTML(x.flag_note)}</div>`:''}<hr class="detail-divider"><div class="detail-label">What is happening</div><div class="detail-context">${escapeHTML(context)}</div><div class="detail-actions">${action('open',last?.id||x.id,'Open latest ↗')}${action('resumenew',last?.id||x.id,'Handoff to new session')}${isGroup?(x.completed||!['active','completed'].includes(b)?action('groupfinish',x.id,x.completed?'Undo workstream done':'Workstream done',`data-on="${x.completed?'0':'1'}"`):''):action('finish',x.id,x.completed?'Undo done':'Session done',`data-on="${x.completed?'0':'1'}"`)}${l?action('continue',l.id,l.choice==='continue'?'Undo Continue later':'Continue later'):''}${l?action('temporary',l.id,l.choice==='temporary'?'Undo Temporary':'Temporary'):''}${l?.suggestion?action('dismiss',l.id,l.choice==='dismiss'?'Restore suggestion':'Dismiss suggestion'):''}${action('star',x.id,x.flag?'Remove star':'Star',`data-scope="${isGroup?'workstream':'session'}" data-on="${x.flag?'0':'1'}"`)}</div>${isGroup?`<div class="detail-label" style="margin-top:20px">Linked sessions</div><div class="session-list">${x.session_ids.slice().reverse().map(id=>{const s=data.sessions.find(z=>z.id===id);return s?`<div class="session-line"><span>${escapeHTML(s.title)}</span>${action('open',s.id,'Open ↗')}${action('resumenew',s.id,'Handoff')}${s.linked_from?action('unlink',s.id,'Unlink'):''}</div>`:''}).join('')}</div>`:action('link',x.id,x.linked_from?'Unlink session':'Link to workstream')}</div><div class="detail-extra"><span><b>Latest activity</b>${escapeHTML(activityOf(x))}</span><span><b>Completion</b>${completionText}</span></div>`}
 function topicPicker(x,isGroup){const names=data.topics||[];if(!names.length)return '';const cur=x.topic_pinned?x.topic:'',opt=(v,t)=>`<option value="${escapeHTML(v)}"${v===cur?' selected':''}>${escapeHTML(t)}</option>`;
  return `<label class="topic-pick">Group <select data-topic-pick="${escapeHTML(x.id)}" data-scope="${isGroup?'workstream':'session'}">${opt('',`Auto${x.auto_topic?' ('+x.auto_topic+')':' (No topic)'}`)}${names.map(n=>opt(n,n)).join('')}<option value="__new__">New group…</option></select></label>`}
-function renderTopicSections(items){const names=data.topics||[],box=$('#topic-sections');topicOn=groupBy==='topic'&&names.length>0;$('#group-switch').hidden=!names.length;$('#group-status').setAttribute('aria-pressed',String(!topicOn));$('#group-topic').setAttribute('aria-pressed',String(topicOn));box.hidden=!topicOn;$('#later').hidden=topicOn;if(!topicOn){box.innerHTML='';return}
+function renderTopicSections(items){const names=data.topics||[],box=$('#topic-sections');topicOn=groupBy==='topic'&&names.length>0;$('#group-switch').hidden=!names.length;$('#group-status').setAttribute('aria-pressed',String(!topicOn));$('#group-topic').setAttribute('aria-pressed',String(topicOn));box.hidden=!topicOn;$('#later').hidden=topicOn;if(!topicOn){setHTML(box,'');return}
  const rows=items.filter(x=>TOPIC_BUCKETS.includes(x.bucket));
- box.innerHTML=[...names,''].map(name=>{const xs=rows.filter(x=>(x.topic||'')===name);if(!xs.length)return '';
+ setHTML(box,[...names,''].map(name=>{const xs=rows.filter(x=>(x.topic||'')===name);if(!xs.length)return '';
   const live=xs.filter(x=>x.bucket!=='idle').sort((a,b)=>TOPIC_BUCKETS.indexOf(a.bucket)-TOPIC_BUCKETS.indexOf(b.bucket)),idle=xs.filter(x=>x.bucket==='idle'),showIdle=!!query||idleTopics.has(name);
-  return `<details class="list-section topic-section" data-topic="${escapeHTML(name)}"${query||openTopics.has(name)?' open':''}><summary class="list-head"><h2>${escapeHTML(name||'No topic')}</h2><span class="count">${xs.length}</span><small>${live.length} to pick up · ${idle.length} idle</small></summary><div class="section-content">${live.map(row).join('')}${showIdle?idle.map(row).join(''):''}${idle.length&&!query?`<button class="show-idle" type="button" data-idle="${escapeHTML(name)}">${showIdle?'Hide':'Show'} ${idle.length} idle</button>`:''}</div></details>`}).join('')}
+  return `<details class="list-section topic-section" data-topic="${escapeHTML(name)}"${query||openTopics.has(name)?' open':''}><summary class="list-head"><h2>${escapeHTML(name||'No topic')}</h2><span class="count">${xs.length}</span><small>${live.length} to pick up · ${idle.length} idle</small></summary><div class="section-content">${live.map(row).join('')}${showIdle?idle.map(row).join(''):''}${idle.length&&!query?`<button class="show-idle" type="button" data-idle="${escapeHTML(name)}">${showIdle?'Hide':'Show'} ${idle.length} idle</button>`:''}</div></details>`}).join(''))}
 function attentionRow(x){const eligible=bulkMode&&view==='workstreams'&&['check','yourturn'].includes(x.bucket);return eligible?`<div class="bulk-row"><label class="bulk-check"><input type="checkbox" data-bulk-id="${escapeHTML(x.id)}" aria-label="Select ${escapeHTML(titleOf(x))}" ${bulkSelected.has(x.id)?'checked':''} ${bulkBusy?'disabled':''}></label>${row(x)}</div>`:row(x)}
 function render(){if(!data||document.activeElement?.matches?.('select[data-topic-pick]'))return;hideActionTooltip();const items=(view==='workstreams'?data.workstreams:data.sessions).filter(visible),groups=Object.fromEntries(Object.keys(LABEL).map(k=>[k,items.filter(x=>x.bucket===k)]));
  renderTopicSections(items);
  const eligible=items.filter(x=>['check','yourturn'].includes(x.bucket));const eligibleIds=new Set(eligible.map(x=>x.id));for(const id of bulkSelected)if(!eligibleIds.has(id))bulkSelected.delete(id);if(view!=='workstreams'){bulkMode=false;bulkSelected.clear()}$('#bulk-actions').hidden=bulkMode||view!=='workstreams'||!eligible.length;$('#bulk-bar').hidden=!bulkMode;$('#bulk-count').textContent=`${bulkSelected.size} selected`;$('#bulk-complete').disabled=bulkBusy||!bulkSelected.size;$('#bulk-all').disabled=bulkBusy||!groups.yourturn.length;$('#bulk-cancel').disabled=bulkBusy;
  if(!items.some(x=>x.id===selected))selected=items.find(x=>['asking','check','yourturn'].includes(x.bucket))?.id||items[0]?.id||null;
- for(const [bucket,id] of Object.entries({asking:'ask',check:'check',yourturn:'review',active:'work',pending:'later',idle:'idle',completed:'done',temporary:'temporary',suggested:'suggested'})){const all=groups[bucket],xs=topicOn&&TOPIC_BUCKETS.includes(bucket)?[]:all,list=$('#list-'+id),head=document.querySelector(`[data-group="${bucket}"]`);list.innerHTML=xs.map(['check','yourturn'].includes(bucket)?attentionRow:row).join('');list.hidden=xs.length===0;if(head)head.hidden=xs.length===0;count('count-'+id,all.length);count('metric-'+id,all.length)}
+ for(const [bucket,id] of Object.entries({asking:'ask',check:'check',yourturn:'review',active:'work',pending:'later',idle:'idle',completed:'done',temporary:'temporary',suggested:'suggested'})){const all=groups[bucket],archived=['idle','completed','temporary','suggested'].includes(bucket),xs=(topicOn&&TOPIC_BUCKETS.includes(bucket))||(archived&&!$('#archive').open)?[]:all,list=$('#list-'+id),head=document.querySelector(`[data-group="${bucket}"]`);setHTML(list,xs.map(['check','yourturn'].includes(bucket)?attentionRow:row).join(''));list.hidden=xs.length===0;if(head)head.hidden=xs.length===0;count('count-'+id,all.length);count('metric-'+id,all.length)}
  const attention=groups.asking.length+groups.check.length+groups.yourturn.length,archive=groups.completed.length+groups.temporary.length+(topicOn?0:groups.idle.length+groups.suggested.length);
  count('count-attention',attention);count('count-archive',archive);count('nav-attention',attention);count('nav-working',groups.active.length);count('nav-later',groups.pending.length);count('nav-archive',archive);
  foldSection('attention',attention);foldSection('working',groups.active.length);foldSection('later',groups.pending.length);foldSection('archive',archive);
- $('#detail-content').innerHTML=detail(items.find(x=>x.id===selected));renderToday();$('#view-workstreams').setAttribute('aria-pressed',String(view==='workstreams'));$('#view-sessions').setAttribute('aria-pressed',String(view==='sessions'));
+ setHTML($('#detail-content'),detail(items.find(x=>x.id===selected)));renderToday();$('#view-workstreams').setAttribute('aria-pressed',String(view==='workstreams'));$('#view-sessions').setAttribute('aria-pressed',String(view==='sessions'));
  document.querySelectorAll('[data-agent]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.agent===account)));
  $('#view-workstreams').textContent=`Workstreams (${data.workstreams.length})`;$('#view-sessions').textContent=`Sessions (${data.sessions.length})`;
  const links=data.link_suggestions.filter(x=>account==='all'||(data.sessions.find(s=>s.id===x.child)?.root==='codex'?'codex':'claude')===account);$('#link-section').hidden=view!=='workstreams'||!links.length;count('count-links',links.length);
- $('#link-list').innerHTML=links.map(x=>`<div class="linkitem"><div class="pair"><b>${escapeHTML(x.child_title)}</b> → ${escapeHTML(x.parent_title)}<small>${escapeHTML(x.reason)}</small></div>${action('accept',x.child,'Link',`data-parent="${escapeHTML(x.parent)}"`)}${action('reject',x.child,'Dismiss',`data-parent="${escapeHTML(x.parent)}"`)}</div>`).join('');
+ setHTML($('#link-list'),links.map(x=>`<div class="linkitem"><div class="pair"><b>${escapeHTML(x.child_title)}</b> → ${escapeHTML(x.parent_title)}<small>${escapeHTML(x.reason)}</small></div>${action('accept',x.child,'Link',`data-parent="${escapeHTML(x.parent)}"`)}${action('reject',x.child,'Dismiss',`data-parent="${escapeHTML(x.parent)}"`)}</div>`).join(''));
  $('#updated').textContent=`Live · updated ${new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · ${data.version||'local copy'}`;$('#updated').classList.remove('offline');document.title=`Agent Board · ${attention} need attention`;
  $('#release-service-version').textContent=data.version||'local copy';
  const hooks=data.hooks||{},missing=hooks.missing||[];let skipped='';try{skipped=localStorage.getItem('hooksSkipped')||''}catch(e){}
@@ -1548,7 +1655,7 @@ function render(){if(!data||document.activeElement?.matches?.('select[data-topic
  $('#hook-text').textContent=`Without them the board cannot show: ${missing.join(', ')}. Add hooks writes them to your Claude Code settings.json and first saves a copy in the Agent Board backups folder.`;
 }
 let tickBusy=false;
-async function tick(){if(tickBusy)return;tickBusy=true;try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('Offline');data=await r.json();render()}catch(e){$('#updated').textContent='Board service offline';$('#updated').classList.add('offline');document.title='Agent Board offline'}finally{tickBusy=false}}
+async function tick(){if(tickBusy)return;tickBusy=true;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{const r=await fetch('/api/status',{cache:'no-store',signal:controller.signal});if(!r.ok)throw Error('Offline');data=await r.json();render()}catch(e){$('#updated').textContent='Board service offline';$('#updated').classList.add('offline');document.title='Agent Board offline'}finally{clearTimeout(timeout);tickBusy=false}}
 async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error('Could not save change');await tick()}
 let linkChild=null;
 function linkResults(){const q=$('#link-search').value.toLowerCase().trim(),current=data.sessions.find(s=>s.id===linkChild)?.workstream_id;$('#link-results').innerHTML=data.workstreams.filter(w=>w.id!==linkChild&&w.id!==current&&(!q||w.title.toLowerCase().includes(q))).slice(0,30).map(w=>`<button type="button" class="action" data-action="linktarget" data-id="${escapeHTML(w.id)}">${escapeHTML(w.title)} · ${w.session_count} sessions</button>`).join('')||'<div class="empty">No matching workstreams</div>'}
@@ -1575,12 +1682,16 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  }catch(err){alert(err.message)}});
 document.addEventListener('change',async e=>{if(e.target.matches?.('input[data-bulk-id]')){e.target.checked?bulkSelected.add(e.target.dataset.bulkId):bulkSelected.delete(e.target.dataset.bulkId);render();return}const s=e.target.closest?.('select[data-topic-pick]');if(!s)return;let topic=s.value;if(topic==='__new__'){topic=(prompt('New group name:','')||'').trim();if(!topic){s.blur();render();return}}s.blur();try{await post('/api/topic',{id:s.dataset.topicPick,scope:s.dataset.scope,topic})}catch(err){alert(err.message);render()}});
 $('#search').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render()});$('#topic-sections').addEventListener('toggle',e=>{const t=e.target.dataset?.topic;if(t===undefined||query)return;e.target.open?openTopics.add(t):openTopics.delete(t)},true);$('#link-search').addEventListener('input',linkResults);$('#link-cancel').addEventListener('click',()=>$('#link-dialog').close());
-updateNav();tick();setInterval(tick,2000);
+document.addEventListener('toggle',e=>{if(['archive','today'].includes(e.target.id))render()},true);
+let pollTimer=null;
+function schedulePoll(){clearTimeout(pollTimer);pollTimer=setTimeout(async()=>{await tick();schedulePoll()},document.hidden?30000:5000)}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick();schedulePoll()});
+updateNav();tick();schedulePoll();
 </script></body></html>"""
 
 _status_lock = threading.Lock()
 _status_cache = {}
-STATUS_TTL = 3.0
+STATUS_TTL = 10.0
 
 
 def cached_status(hours):
