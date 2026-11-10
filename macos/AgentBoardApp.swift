@@ -80,6 +80,19 @@ private func boardListeners() -> [Int32] {
         .split(whereSeparator: \.isNewline).compactMap { Int32($0) }
 }
 
+private func menuSignature(_ workstreams: [[String: Any]]) -> [String] {
+    var result: [String] = []
+    for bucket in ["asking", "check", "yourturn", "active", "pending", "suggested"] {
+        let rows = workstreams.filter { ($0["bucket"] as? String) == bucket }
+        result.append("\(bucket):\(rows.count)")
+        for row in rows.prefix(12) {
+            result.append([row["id"] as? String ?? "", row["latest_id"] as? String ?? "",
+                           row["title"] as? String ?? ""].joined(separator: "\u{1f}"))
+        }
+    }
+    return result
+}
+
 /// Older VS Code sidebars run this app's bundled Python script, which the app
 /// updater cannot stop and which writes __pycache__ into the signed bundle.
 private func removeBundledBytecode() {
@@ -105,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var serviceVersion: String?
     private var lastStatusSuccess: Date?
     private var lastWorkstreams: [[String: Any]] = []
+    private var lastMenuSignature: [String] = []
     private var isUpdating = false
     private var lastServiceReplace: Date?
     private let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
@@ -117,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         statusItem.button?.title = "⚪"
         rebuildMenu()
         showBoard(nil)
-        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
             self?.refreshStatus()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -436,11 +450,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                    let response = response as? HTTPURLResponse, response.statusCode == 200,
                    let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let workstreams = object["workstreams"] as? [[String: Any]] {
+                    let signature = menuSignature(workstreams)
+                    let menuChanged = self.serviceError != nil || self.serviceVersion != object["version"] as? String ||
+                        self.lastMenuSignature != signature
                     self.serviceError = nil
                     self.serviceVersion = object["version"] as? String
                     self.lastStatusSuccess = Date()
                     self.lastWorkstreams = workstreams
-                    self.rebuildMenu()
+                    if menuChanged {
+                        self.lastMenuSignature = signature
+                        self.rebuildMenu()
+                    }
                     self.replaceBundledPythonService()
                     if !self.boardLoaded {
                         self.showingOffline = false
