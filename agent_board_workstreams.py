@@ -96,6 +96,17 @@ def complete(root, on):
     mutate(change)
 
 
+def complete_many(ids):
+    """Complete a validated selection in one locked write."""
+    if not ids or not all(valid_id(root) for root in ids):
+        raise ValueError("invalid workstream ids")
+    def change(data):
+        at = time.time()
+        for root in ids:
+            data["completed"][root] = {"at": at}
+    mutate(change)
+
+
 def tokens(title):
     value = re.sub(r"[^a-z0-9]+", " ", (title or "").lower())
     return {part for part in value.split() if (len(part) > 1 or part.isdigit()) and part not in NOISE}

@@ -25,6 +25,8 @@ The default sources are `~/.claude/projects` and `~/.codex/sessions`. Missing so
 
 Finished replies leave **Your turn** after one hour without activity and become **Idle**, unless a saved or suggested state applies. This does not mark the work complete. A session explicitly asking for input or permission remains in **Asking you**.
 
+In Workstreams view, use **Select to complete** in Needs your attention to select multiple rows. **Select all Your turn** selects the visible finished replies; Check me rows can be selected individually. Completed workstreams remain in Other work and can be undone there.
+
 ## Personal settings
 
 Settings, board choices, and confirmed workstream links live in `~/.agent-board/`, outside the clone. Create that folder and copy `examples/config.example.json` to `~/.agent-board/config.json` to change sources or opening behavior. You may also copy `examples/custom.example.css` to `~/.agent-board/custom.css` to change colors, spacing, and layout. The custom CSS loads after the built-in styles, so your design survives source updates.
