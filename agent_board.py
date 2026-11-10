@@ -63,7 +63,8 @@ TAIL_BYTES = 1_000_000
 STUCK_MIN = 15          # a tool running longer than this is flagged
 QUIET_MIN = 5           # no log writes for this long while "thinking" is flagged
 ABANDONED_MIN = 120     # quiet longer than this and not finished = abandoned, not stuck
-YOUR_TURN_HOURS = 3    # finished within this window = "your turn", older = idle
+YOUR_TURN_HOURS = 1    # finished within this window = "your turn", older = idle
+SUGGESTION_RECOVERY_HOURS = 3  # keep missed-hook recovery independent of the display timeout
 UNATTENDED_DONE_MIN = 5  # a script-started session that finished cleanly completes itself after this
 SUGGESTION_REVIEW_HOURS = 72  # unreviewed completion and temporary suggestions expire
 COMMON_TOKENS = {"run_query.py", "scripts/run_query.py", ".presto_creds.env", "presto_creds.env",
@@ -1218,8 +1219,8 @@ def unattended_done(row, marker, now):
 def recover_suggestion(session, path, now, completed):
     """Cover a missed Stop hook for a recently finished turn."""
     finished_at = session.get("last_ts")
-    recently_visible = (now - finished_at <= YOUR_TURN_HOURS * 3600 or
-                        now - path.stat().st_mtime <= YOUR_TURN_HOURS * 3600)
+    recently_visible = (now - finished_at <= SUGGESTION_RECOVERY_HOURS * 3600 or
+                        now - path.stat().st_mtime <= SUGGESTION_RECOVERY_HOURS * 3600)
     if (session.get("last_kind") != "done" or not finished_at or
             not 10 <= now - finished_at <= 24 * 3600 or not recently_visible or
             not session.get("last_reply")):

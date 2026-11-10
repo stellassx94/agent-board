@@ -23,6 +23,8 @@ Click the image to play the 90-second tour. For a player with chapters, open [`d
 
 The default sources are `~/.claude/projects` and `~/.codex/sessions`. Missing sources are skipped. A running board updates every five seconds. Stop it with Ctrl+C. If another Agent Board already uses port 8765, start this copy with `python3 agent_board.py --port 8766` and open the matching URL.
 
+Finished replies leave **Your turn** after one hour without activity and become **Idle**, unless a saved or suggested state applies. This does not mark the work complete. A session explicitly asking for input or permission remains in **Asking you**.
+
 ## Personal settings
 
 Settings, board choices, and confirmed workstream links live in `~/.agent-board/`, outside the clone. Create that folder and copy `examples/config.example.json` to `~/.agent-board/config.json` to change sources or opening behavior. You may also copy `examples/custom.example.css` to `~/.agent-board/custom.css` to change colors, spacing, and layout. The custom CSS loads after the built-in styles, so your design survives source updates.

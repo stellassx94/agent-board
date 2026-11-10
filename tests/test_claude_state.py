@@ -126,6 +126,21 @@ class ClaudeStateTests(unittest.TestCase):
         parsed = board.parse_session(self.path)
         self.assertEqual("yourturn", board.classify(parsed, now, [], {"at": now - 5})[0])
 
+    def test_finished_turn_leaves_your_turn_after_one_hour(self):
+        finished = 2_000_000_000
+        self.write([user("Do the work", finished - 30),
+                    assistant([{"type": "text", "text": "Done"}], finished, "end_turn")], mtime=finished)
+        parsed = board.parse_session(self.path)
+        self.assertEqual("yourturn", board.classify(parsed, finished + 3599, [])[0])
+        self.assertEqual("idle", board.classify(parsed, finished + 3600, [])[0])
+
+    def test_unanswered_tool_question_does_not_expire_after_one_hour(self):
+        started = 2_000_000_000
+        call = {"type": "tool_use", "id": "ask-1", "name": "AskUserQuestion", "input": {}}
+        self.write([user("Help", started - 30), assistant([call], started, "tool_use")], mtime=started)
+        parsed = board.parse_session(self.path)
+        self.assertEqual("asking", board.classify(parsed, started + 3601, [])[0])
+
     def test_subagent_activity_clears_permission_marker(self):
         now = 2_000_000_000
         call = {"type": "tool_use", "id": "tool-1", "name": "Agent",
